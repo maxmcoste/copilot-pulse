@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="report-container">
+    <div class="report-header">
+        <h1>{{ report_title | default("Copilot Report") }}</h1>
+        <p class="subtitle">Generated: {{ generated_at | default("N/A") }}</p>
+    </div>
+
+    {% for section in sections %}
+    <div class="report-section">
+        <h2>{{ section.title }}</h2>
+        {% if section.chart_id %}
+        <div id="{{ section.chart_id }}" class="chart-placeholder"></div>
+        {% endif %}
+        {% if section.data %}
+        <table class="data-table">
+            {% if section.headers %}
+            <thead>
+                <tr>
+                    {% for header in section.headers %}
+                    <th>{{ header }}</th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            {% endif %}
+            <tbody>
+                {% for row in section.rows %}
+                <tr>
+                    {% for cell in row %}
+                    <td>{{ cell }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        {% if section.notes %}
+        <p class="section-notes">{{ section.notes }}</p>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

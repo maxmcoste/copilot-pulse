@@ -1,0 +1,192 @@
+[
+  {
+    "date": "2026-03-25",
+    "total_active_users": 142,
+    "total_engaged_users": 118,
+    "copilot_ide_code_completions": {
+      "total_engaged_users": 105,
+      "total_code_suggestions": 48520,
+      "total_code_acceptances": 15640,
+      "total_code_lines_suggested": 72300,
+      "total_code_lines_accepted": 23400,
+      "editors": [
+        {
+          "name": "vscode",
+          "total_engaged_users": 82,
+          "models": [
+            {
+              "name": "gpt-4o",
+              "is_custom_model": false,
+              "total_engaged_users": 82,
+              "total_code_suggestions": 38000,
+              "total_code_acceptances": 12200,
+              "total_code_lines_suggested": 57000,
+              "total_code_lines_accepted": 18300
+            }
+          ]
+        },
+        {
+          "name": "jetbrains",
+          "total_engaged_users": 23,
+          "models": [
+            {
+              "name": "gpt-4o",
+              "is_custom_model": false,
+              "total_engaged_users": 23,
+              "total_code_suggestions": 10520,
+              "total_code_acceptances": 3440,
+              "total_code_lines_suggested": 15300,
+              "total_code_lines_accepted": 5100
+            }
+          ]
+        }
+      ],
+      "languages": [
+        {
+          "name": "python",
+          "total_engaged_users": 45,
+          "total_code_suggestions": 18000,
+          "total_code_acceptances": 6300,
+          "total_code_lines_suggested": 27000,
+          "total_code_lines_accepted": 9450
+        },
+        {
+          "name": "typescript",
+          "total_engaged_users": 38,
+          "total_code_suggestions": 15200,
+          "total_code_acceptances": 5320,
+          "total_code_lines_suggested": 22800,
+          "total_code_lines_accepted": 7980
+        },
+        {
+          "name": "java",
+          "total_engaged_users": 22,
+          "total_code_suggestions": 8800,
+          "total_code_acceptances": 2640,
+          "total_code_lines_suggested": 13200,
+          "total_code_lines_accepted": 3960
+        },
+        {
+          "name": "go",
+          "total_engaged_users": 12,
+          "total_code_suggestions": 4800,
+          "total_code_acceptances": 1200,
+          "total_code_lines_suggested": 7200,
+          "total_code_lines_accepted": 1800
+        },
+        {
+          "name": "ruby",
+          "total_engaged_users": 6,
+          "total_code_suggestions": 1720,
+          "total_code_acceptances": 180,
+          "total_code_lines_suggested": 2100,
+          "total_code_lines_accepted": 210
+        }
+      ]
+    },
+    "copilot_ide_chat": {
+      "total_engaged_users": 67,
+      "total_chats": 1240,
+      "total_chat_insertion_events": 310,
+      "total_chat_copy_events": 520,
+      "editors": [
+        {
+          "name": "vscode",
+          "total_engaged_users": 55,
+          "models": []
+        },
+        {
+          "name": "jetbrains",
+          "total_engaged_users": 12,
+          "models": []
+        }
+      ]
+    },
+    "copilot_dotcom_chat": {
+      "total_engaged_users": 34,
+      "total_chats": 420,
+      "models": [
+        {
+          "name": "gpt-4o",
+          "is_custom_model": false,
+          "total_engaged_users": 34,
+          "total_chats": 420
+        }
+      ]
+    },
+    "copilot_dotcom_pull_requests": {
+      "total_engaged_users": 28,
+      "total_pr_summaries_created": 45,
+      "repositories": []
+    },
+    "copilot_cli": {
+      "total_engaged_users": 15,
+      "total_chats": 180,
+      "models": []
+    }
+  },
+  {
+    "date": "2026-03-26",
+    "total_active_users": 148,
+    "total_engaged_users": 125,
+    "copilot_ide_code_completions": {
+      "total_engaged_users": 112,
+      "total_code_suggestions": 52100,
+      "total_code_acceptances": 17200,
+      "total_code_lines_suggested": 78150,
+      "total_code_lines_accepted": 25800,
+      "editors": [
+        {
+          "name": "vscode",
+          "total_engaged_users": 88,
+          "models": []
+        },
+        {
+          "name": "jetbrains",
+          "total_engaged_users": 24,
+          "models": []
+        }
+      ],
+      "languages": [
+        {
+          "name": "python",
+          "total_engaged_users": 48,
+          "total_code_suggestions": 19500,
+          "total_code_acceptances": 6825,
+          "total_code_lines_suggested": 29250,
+          "total_code_lines_accepted": 10238
+        },
+        {
+          "name": "typescript",
+          "total_engaged_users": 40,
+          "total_code_suggestions": 16400,
+          "total_code_acceptances": 5740,
+          "total_code_lines_suggested": 24600,
+          "total_code_lines_accepted": 8610
+        }
+      ]
+    },
+    "copilot_ide_chat": {
+      "total_engaged_users": 72,
+      "total_chats": 1380,
+      "total_chat_insertion_events": 345,
+      "total_chat_copy_events": 570,
+      "editors": []
+    },
+    "copilot_dotcom_chat": {
+      "total_engaged_users": 38,
+      "total_chats": 480,
+      "models": []
+    },
+    "copilot_dotcom_pull_requests": {
+      "total_engaged_users": 31,
+      "total_pr_summaries_created": 52,
+      "repositories": []
+    },
+    "copilot_cli": {
+      "total_engaged_users": 18,
+      "total_chats": 210,
+      "models": []
+    }
+  }
+]

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if active_tab == 'chat' %}
+<!-- Chat Interface -->
+<div class="chat-container">
+    <div class="chat-messages" id="chatMessages">
+        <div class="message bot-message">
+            <strong>Copilot Pulse</strong><br>
+            Ciao! Sono il tuo analista Copilot. Chiedimi qualsiasi cosa sull'utilizzo di GitHub Copilot nella tua organizzazione.
+        </div>
+    </div>
+    <div class="chat-input-container">
+        <input type="text" id="chatInput" class="chat-input" placeholder="Scrivi una domanda..." autocomplete="off">
+        <button id="chatSend" class="btn btn-primary">Invia</button>
+    </div>
+</div>
+
+{% else %}
+<!-- Dashboard -->
+<div class="dashboard-header">
+    <h1>Copilot Usage Dashboard</h1>
+    <p class="subtitle">Enterprise: {{ enterprise or 'N/A' }} · Org: {{ org or 'N/A' }}</p>
+</div>
+
+<!-- KPI Cards -->
+<div class="kpi-grid" id="kpiCards" hx-get="/api/metrics" hx-trigger="load" hx-swap="innerHTML">
+    <div class="kpi-card">
+        <div class="kpi-value">--</div>
+        <div class="kpi-label">Active Users</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value">--</div>
+        <div class="kpi-label">Engaged Users</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value">--%</div>
+        <div class="kpi-label">Acceptance Rate</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-value">--</div>
+        <div class="kpi-label">Active Seats</div>
+    </div>
+</div>
+
+<!-- Charts -->
+<div class="charts-grid">
+    <div class="chart-card">
+        <h3>Adoption Trend (28 days)</h3>
+        <div id="adoptionChart" class="chart-placeholder">Loading...</div>
+    </div>
+    <div class="chart-card">
+        <h3>Feature Usage Distribution</h3>
+        <div id="featureChart" class="chart-placeholder">Loading...</div>
+    </div>
+</div>
+
+<!-- Quick Chat -->
+<div class="quick-chat">
+    <h3>Quick Ask</h3>
+    <div class="quick-actions">
+        <button class="btn" onclick="quickAsk('Quanti utenti attivi abbiamo avuto questa settimana?')">Active Users</button>
+        <button class="btn" onclick="quickAsk('Qual è l\\'acceptance rate per linguaggio?')">Acceptance Rate</button>
+        <button class="btn" onclick="quickAsk('Chi sono i top 10 utenti?')">Top Users</button>
+        <button class="btn" onclick="quickAsk('Mostrami il trend degli ultimi 28 giorni')">28-Day Trend</button>
+    </div>
+    <div id="quickAnswer" class="quick-answer"></div>
+</div>
+{% endif %}
+{% endblock %}

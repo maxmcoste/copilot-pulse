@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title | default("Copilot Pulse") }}</title>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <span class="logo">◈</span> Copilot Pulse
+        </div>
+        <div class="nav-links">
+            <a href="/" class="{% if active_tab != 'chat' %}active{% endif %}">Dashboard</a>
+            <a href="/chat" class="{% if active_tab == 'chat' %}active{% endif %}">Chat</a>
+        </div>
+        <div class="nav-info">
+            {% if enterprise %}<span class="badge">{{ enterprise }}</span>{% endif %}
+            {% if org %}<span class="badge badge-secondary">{{ org }}</span>{% endif %}
+        </div>
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
