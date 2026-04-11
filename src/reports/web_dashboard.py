@@ -633,41 +633,37 @@ def create_app(config: AppConfig) -> FastAPI:
             return {"error": str(e)}
 
     @app.get("/api/charts/agent-edits-wow")
-    async def api_chart_agent_edits_wow():
-        """Return weekly Agent Edits / User for the last 13 weeks.
-
-        Fetches one representative day per week (Wednesday) via the
-        1-day org metrics endpoint.  Each week's value is the sum of
-        ``agent_edit.code_generation_activity_count`` across that day
-        divided by ``monthly_active_users`` (28-day rolling count on
-        that same day).
-
-        Because a single day is a sample of the week, the numbers are
-        per-day not per-week — but the week-over-week *trend* is valid.
-        """
+    async def api_chart_agent_edits_wow(request: Request):
+        """Return weekly Agent Edits / User for the last 13 weeks."""
         from datetime import date as _date, timedelta as _td
+
+        level, value = _parse_filter(request)
+        filter_logins = _filter_logins(level, value) if level and value else None
+        use_user_endpoint = filter_logins is not None
 
         auth = build_github_auth(config)
         client = GitHubBaseClient(auth)
 
-        # Pick Wednesdays going back 13 weeks from the most recent safe day
-        base = _date.today() - _td(days=2)          # latest day with data
-        # Align to the most recent Wednesday
-        days_since_wed = (base.weekday() - 2) % 7   # 0=Mon … 6=Sun; Wed=2
+        base = _date.today() - _td(days=2)
+        days_since_wed = (base.weekday() - 2) % 7
         last_wed = base - _td(days=days_since_wed)
         weeks = [last_wed - _td(weeks=i) for i in range(12, -1, -1)]
 
-        async def _fetch_day(day_str: str) -> dict[str, Any] | None:
+        async def _fetch_day(day_str: str) -> list[dict[str, Any]] | dict[str, Any] | None:
             try:
-                resp = await client.get(
-                    f"/orgs/{config.github_org}/copilot/metrics/reports/organization-1-day",
-                    params={"day": day_str},
+                endpoint = (
+                    f"/orgs/{config.github_org}/copilot/metrics/reports/users-1-day"
+                    if use_user_endpoint
+                    else f"/orgs/{config.github_org}/copilot/metrics/reports/organization-1-day"
                 )
+                resp = await client.get(endpoint, params={"day": day_str})
                 dr = ReportDownloadResponse(**resp.json())
                 if not dr.download_links:
                     return None
                 raw = await client.download_ndjson(dr.download_links[0])
                 recs = _unwrap_day_totals(raw)
+                if use_user_endpoint:
+                    return recs  # return all user records
                 return recs[0] if recs else None
             except Exception as exc:
                 logger.warning("agent-edits-wow: failed to fetch %s: %s", day_str, exc)
@@ -682,21 +678,40 @@ def create_app(config: AppConfig) -> FastAPI:
             values: list[float] = []
             colors: list[str] = []
 
-            for week_date, rec in zip(weeks, results):
+            for week_date, result in zip(weeks, results):
                 label = f"W{week_date.isocalendar()[1]} ({week_date.strftime('%d/%m')})"
                 labels.append(label)
-                if rec is None:
+                if result is None:
                     values.append(0)
                     colors.append("#30363d")
                     continue
-                agent_edits = 0
-                for feat in rec.get("totals_by_feature", []):
-                    if feat.get("feature") == "agent_edit":
-                        agent_edits += feat.get("code_generation_activity_count", 0)
-                total_users = rec.get("monthly_active_users", 0)
+
+                if use_user_endpoint:
+                    # Filter user records by org membership
+                    filtered = [
+                        r for r in result
+                        if r.get("user_login", "").lower() in filter_logins
+                    ]
+                    agent_edits = 0
+                    active_users: set[str] = set()
+                    for rec in filtered:
+                        login = rec.get("user_login", "")
+                        if login:
+                            active_users.add(login)
+                        for feat in rec.get("totals_by_feature", []):
+                            if feat.get("feature") == "agent_edit":
+                                agent_edits += feat.get("code_generation_activity_count", 0)
+                    total_users = len(active_users)
+                else:
+                    rec = result
+                    agent_edits = 0
+                    for feat in rec.get("totals_by_feature", []):
+                        if feat.get("feature") == "agent_edit":
+                            agent_edits += feat.get("code_generation_activity_count", 0)
+                    total_users = rec.get("monthly_active_users", 0)
+
                 ratio = agent_edits / total_users if total_users else 0
                 values.append(round(ratio, 1))
-                # Color by weekly band (monthly thresholds / 4)
                 if ratio < 2.5:
                     colors.append("#f85149")
                 elif ratio <= 12.5:
