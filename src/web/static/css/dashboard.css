@@ -704,6 +704,36 @@ body {
     font-weight: 700;
 }
 
+/* Live analysis spinner & animations */
+.analysis-spinner {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border: 2px solid var(--accent-blue);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    vertical-align: middle;
+    margin-right: 4px;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.log-entry-appear {
+    animation: fadeSlideIn 0.25s ease-out;
+}
+
+@keyframes fadeSlideIn {
+    from { opacity: 0; transform: translateX(-8px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+
+.live-summary {
+    cursor: pointer;
+}
+
 /* Markdown content inside bot messages */
 .bot-message p {
     margin: 0 0 8px 0;

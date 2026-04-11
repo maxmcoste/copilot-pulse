@@ -505,12 +505,12 @@ def create_app(config: AppConfig) -> FastAPI:
                 total_users = rec.get("monthly_active_users", 0)
                 ratio = agent_edits / total_users if total_users else 0
                 values.append(round(ratio, 1))
-                # Color by band
-                if ratio < 10:
+                # Color by weekly band (monthly thresholds / 4)
+                if ratio < 2.5:
                     colors.append("#f85149")
-                elif ratio <= 50:
+                elif ratio <= 12.5:
                     colors.append("#d29922")
-                elif ratio <= 100:
+                elif ratio <= 25:
                     colors.append("#3fb950")
                 else:
                     colors.append("#58a6ff")

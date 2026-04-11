@@ -60,6 +60,8 @@ class ExportEngine:
             writer.writerow([])
 
             for section in sections:
+                if isinstance(section, str):
+                    section = {"title": "", "data": section}
                 section_title = section.get("title", "")
                 headers = section.get("headers", [])
                 rows = section.get("rows", [])
@@ -71,9 +73,11 @@ class ExportEngine:
                     writer.writerow(headers)
                     for row in rows:
                         writer.writerow(row)
-                elif data:
+                elif isinstance(data, dict):
                     for key, value in data.items():
                         writer.writerow([key, value])
+                elif data:
+                    writer.writerow([str(data)])
 
                 writer.writerow([])
 
@@ -101,6 +105,8 @@ class ExportEngine:
 
         row_offset = 4
         for section in sections:
+            if isinstance(section, str):
+                section = {"title": "", "data": section}
             section_title = section.get("title", "Data")
             headers = section.get("headers", [])
             rows = section.get("rows", [])
@@ -131,11 +137,14 @@ class ExportEngine:
                 summary.cell(row=row_offset, column=1, value=f"→ See '{section_title}' sheet")
                 row_offset += 1
 
-            elif data:
+            elif isinstance(data, dict):
                 for key, value in data.items():
                     summary.cell(row=row_offset, column=1, value=str(key))
                     summary.cell(row=row_offset, column=2, value=str(value))
                     row_offset += 1
+            elif data:
+                summary.cell(row=row_offset, column=1, value=str(data))
+                row_offset += 1
 
             row_offset += 1
 
@@ -189,6 +198,8 @@ class ExportEngine:
         elements.append(Spacer(1, 12))
 
         for section in sections:
+            if isinstance(section, str):
+                section = {"title": "", "data": section}
             section_title = section.get("title", "")
             headers = section.get("headers", [])
             rows = section.get("rows", [])
@@ -214,7 +225,7 @@ class ExportEngine:
                 )
                 elements.append(t)
 
-            elif data:
+            elif isinstance(data, dict):
                 kv_data = [[str(k), str(v)] for k, v in data.items()]
                 t = Table(kv_data)
                 t.setStyle(
@@ -225,6 +236,8 @@ class ExportEngine:
                     ])
                 )
                 elements.append(t)
+            elif data:
+                elements.append(Paragraph(str(data), styles["Normal"]))
 
             if notes:
                 elements.append(Spacer(1, 6))

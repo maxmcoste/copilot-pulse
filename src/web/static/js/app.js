@@ -10,9 +10,8 @@ const chatInput = document.getElementById('chatInput');
 const chatSend = document.getElementById('chatSend');
 
 let ws = null;
-// Accumulates log entries received during a single request so they can
-// be rendered inside a collapsible <details> block in the bot message.
-let pendingLogs = [];
+// Live analysis block that shows logs as they arrive in real-time.
+let liveAnalysis = null; // { container, logList, stepCount }
 
 function initChat() {
     if (!chatInput) return;
@@ -24,16 +23,17 @@ function initChat() {
         const data = JSON.parse(event.data);
 
         if (data.type === 'log') {
-            pendingLogs.push(data.message);
-            showTyping(data.message);
-        } else if (data.type === 'response') {
-            addMessage(data.message, 'bot', pendingLogs);
-            pendingLogs = [];
+            ensureLiveAnalysis();
+            appendLogEntry(data.message);
         } else if (data.type === 'status') {
-            showTyping(data.message);
+            ensureLiveAnalysis();
+            appendLogEntry(data.message);
+        } else if (data.type === 'response') {
+            finalizeLiveAnalysis();
+            appendBotResponse(data.message);
         } else if (data.type === 'error') {
-            addMessage(`${T().error_prefix || 'Error'}: ${data.message}`, 'bot', pendingLogs);
-            pendingLogs = [];
+            finalizeLiveAnalysis();
+            appendBotResponse(`${T().error_prefix || 'Error'}: ${data.message}`);
         }
     };
 
@@ -45,6 +45,88 @@ function initChat() {
     chatInput.addEventListener('keypress', function(e) {
         if (e.key === 'Enter') sendMessage();
     });
+}
+
+/**
+ * Create the live analysis block immediately when the first log arrives.
+ * The block is an open <details> with a streaming list of steps.
+ */
+function ensureLiveAnalysis() {
+    if (liveAnalysis) return;
+    removeTyping();
+
+    var container = document.createElement('div');
+    container.className = 'message bot-message';
+    container.id = 'liveAnalysisContainer';
+
+    var details = document.createElement('details');
+    details.className = 'agent-logs';
+    details.open = true;
+
+    var summary = document.createElement('summary');
+    summary.className = 'live-summary';
+    summary.innerHTML = '<span class="analysis-spinner"></span> ' +
+        (T().chat_analyzing || 'Analyzing') + '...';
+    details.appendChild(summary);
+
+    var logList = document.createElement('ul');
+    details.appendChild(logList);
+    container.appendChild(details);
+
+    chatMessages.appendChild(container);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    liveAnalysis = { container: container, details: details, summary: summary, logList: logList, stepCount: 0 };
+}
+
+/**
+ * Append a single log entry to the live analysis block.
+ */
+function appendLogEntry(text) {
+    if (!liveAnalysis) return;
+    liveAnalysis.stepCount++;
+    var li = document.createElement('li');
+    li.textContent = text;
+    li.className = 'log-entry-appear';
+    liveAnalysis.logList.appendChild(li);
+
+    // Update summary with step count
+    var label = T().chat_analyzing || 'Analyzing';
+    var stepsWord = liveAnalysis.stepCount === 1 ? 'step' : 'steps';
+    liveAnalysis.summary.innerHTML = '<span class="analysis-spinner"></span> ' +
+        label + ' (' + liveAnalysis.stepCount + ' ' + stepsWord + ')...';
+
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+/**
+ * Finalize the analysis block: remove spinner, collapse, update label.
+ */
+function finalizeLiveAnalysis() {
+    if (!liveAnalysis) return;
+    var la = liveAnalysis;
+    var label = T().chat_analyzing || 'Analyzing';
+    var stepsWord = la.stepCount === 1 ? 'step' : 'steps';
+    la.summary.innerHTML = label + ' (' + la.stepCount + ' ' + stepsWord + ')';
+    la.details.open = false;
+    liveAnalysis = null;
+}
+
+/**
+ * Append the final bot response text below the analysis block.
+ */
+function appendBotResponse(text) {
+    // Find the live container or create a new message
+    var container = document.getElementById('liveAnalysisContainer');
+    if (container) {
+        container.removeAttribute('id');
+        var content = document.createElement('div');
+        content.innerHTML = renderMarkdown(text);
+        container.appendChild(content);
+    } else {
+        addMessage(text, 'bot');
+    }
+    chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
 function sendMessage() {
@@ -642,20 +724,21 @@ function initDashboardCharts() {
                     return;
                 }
                 // Reference bands
+                // Weekly thresholds = monthly / 4
                 var shapes = [
-                    { type: 'line', y0: 10, y1: 10, x0: -0.5, x1: data.labels.length - 0.5,
+                    { type: 'line', y0: 2.5, y1: 2.5, x0: -0.5, x1: data.labels.length - 0.5,
                       xref: 'x', yref: 'y', line: { color: '#f85149', width: 1, dash: 'dot' } },
-                    { type: 'line', y0: 50, y1: 50, x0: -0.5, x1: data.labels.length - 0.5,
+                    { type: 'line', y0: 12.5, y1: 12.5, x0: -0.5, x1: data.labels.length - 0.5,
                       xref: 'x', yref: 'y', line: { color: '#d29922', width: 1, dash: 'dot' } },
-                    { type: 'line', y0: 100, y1: 100, x0: -0.5, x1: data.labels.length - 0.5,
+                    { type: 'line', y0: 25, y1: 25, x0: -0.5, x1: data.labels.length - 0.5,
                       xref: 'x', yref: 'y', line: { color: '#58a6ff', width: 1, dash: 'dot' } },
                 ];
                 var annotations = [
-                    { x: data.labels.length - 0.6, y: 10, xref: 'x', yref: 'y', text: 'Cautious',
+                    { x: data.labels.length - 0.6, y: 2.5, xref: 'x', yref: 'y', text: 'Cautious',
                       showarrow: false, font: { size: 9, color: '#f85149' }, xanchor: 'right' },
-                    { x: data.labels.length - 0.6, y: 50, xref: 'x', yref: 'y', text: 'Standard',
+                    { x: data.labels.length - 0.6, y: 12.5, xref: 'x', yref: 'y', text: 'Standard',
                       showarrow: false, font: { size: 9, color: '#d29922' }, xanchor: 'right' },
-                    { x: data.labels.length - 0.6, y: 100, xref: 'x', yref: 'y', text: 'Agent-First',
+                    { x: data.labels.length - 0.6, y: 25, xref: 'x', yref: 'y', text: 'Agent-First',
                       showarrow: false, font: { size: 9, color: '#58a6ff' }, xanchor: 'right' },
                 ];
                 var traces = [{
