@@ -1,6 +1,6 @@
 """Pydantic v2 models for GitHub Copilot API response payloads."""
 
-from datetime import date, datetime
+import datetime as _dt
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
@@ -130,7 +130,7 @@ class CodeGenerationMetrics(BaseModel):
 
 class CopilotDayMetrics(BaseModel):
     """Aggregated Copilot metrics for a single day."""
-    date: date
+    date: _dt.date
     total_active_users: int = 0
     total_engaged_users: int = 0
     copilot_ide_code_completions: Optional[IdeCompletionMetrics] = None
@@ -152,7 +152,7 @@ class UserUsageRecord(BaseModel):
     """Per-user Copilot usage record from the Usage Metrics API."""
     github_login: str = ""
     team_slug: Optional[str] = None
-    date: Optional[date] = None
+    date: Optional[_dt.date] = None
 
     # Completions
     completions_suggestions: int = 0
@@ -185,8 +185,8 @@ class UserUsageRecord(BaseModel):
 class SeatAssignment(BaseModel):
     """Individual seat assignment within an organization."""
     login: str = ""
-    assigned_at: Optional[datetime] = None
-    last_activity_at: Optional[datetime] = None
+    assigned_at: Optional[_dt.datetime] = None
+    last_activity_at: Optional[_dt.datetime] = None
     last_activity_editor: Optional[str] = None
     plan_type: str = ""
     pending_cancellation_date: Optional[str] = None

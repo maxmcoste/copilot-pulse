@@ -205,7 +205,7 @@ class TestToolsSchema:
     def test_tools_list(self) -> None:
         from src.agent.tools_schema import TOOLS
 
-        assert len(TOOLS) == 8
+        assert len(TOOLS) == 10
         names = [t["name"] for t in TOOLS]
         assert "get_enterprise_metrics" in names
         assert "get_organization_metrics" in names

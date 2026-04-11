@@ -30,12 +30,21 @@ class GitHubBaseClient:
     """Async HTTP client for GitHub API with retry and rate-limit handling.
 
     Args:
-        token: GitHub personal access token.
-        api_version: GitHub API version header.
+        auth: An ``httpx.Auth`` instance (``GitHubAuth`` for PAT, or
+            ``GitHubAppAuth`` for GitHub App installation auth). For backwards
+            compatibility, a raw token string is also accepted.
+        api_version: GitHub API version header (used only when a raw token is
+            passed).
     """
 
-    def __init__(self, token: str, api_version: str = "2026-03-10") -> None:
-        self._auth = GitHubAuth(token, api_version)
+    def __init__(
+        self,
+        auth: httpx.Auth | str,
+        api_version: str = "2026-03-10",
+    ) -> None:
+        if isinstance(auth, str):
+            auth = GitHubAuth(auth, api_version)
+        self._auth = auth
         self._client = httpx.AsyncClient(
             base_url=GITHUB_API_BASE,
             auth=self._auth,

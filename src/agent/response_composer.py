@@ -69,6 +69,10 @@ class ResponseComposer:
                 self._display_feature_distribution(result)
             case "loc_impact":
                 self._display_loc_impact(result)
+            case "org_summary":
+                self._display_org_summary(result)
+            case "org_copilot_analysis":
+                self._display_org_copilot_analysis(result)
             case _:
                 # Generic JSON display
                 import json
@@ -191,6 +195,77 @@ class ResponseComposer:
             f"📅 Period: {result.get('period_days', 0)} days"
         )
         self.console.print(Panel(panel_text, title="Lines of Code Impact", border_style="green"))
+
+    def _display_org_summary(self, result: dict[str, Any]) -> None:
+        panel_text = (
+            f"Total employees: [bold]{result.get('total_employees', 0)}[/]\n"
+            f"With GitHub ID: [bold green]{result.get('with_github_id', 0)}[/]"
+        )
+        self.console.print(Panel(panel_text, title="Org Structure Summary", border_style="blue"))
+
+        # Age ranges
+        age_ranges = result.get("age_ranges", {})
+        if age_ranges:
+            table = Table(title="Employees by Age Range", show_lines=True)
+            table.add_column("Age Range", style="cyan")
+            table.add_column("Count", justify="right", style="green")
+            for age_range, count in age_ranges.items():
+                table.add_row(age_range, str(count))
+            self.console.print(table)
+
+        # Top job families
+        job_families = result.get("job_families", {})
+        if job_families:
+            table = Table(title="Top Job Families", show_lines=True)
+            table.add_column("Job Family", style="cyan")
+            table.add_column("Count", justify="right", style="green")
+            for jf, count in list(job_families.items())[:10]:
+                table.add_row(jf, str(count))
+            self.console.print(table)
+
+        # Sup Org Level 6
+        sup_org = result.get("sup_org_level_6", {})
+        if sup_org:
+            table = Table(title="Sup Org Level 6", show_lines=True)
+            table.add_column("Organization", style="cyan")
+            table.add_column("Count", justify="right", style="green")
+            for org, count in list(sup_org.items())[:15]:
+                table.add_row(org, str(count))
+            self.console.print(table)
+
+    def _display_org_copilot_analysis(self, result: dict[str, Any]) -> None:
+        group_by = result.get("group_by", "")
+        metric = result.get("metric", "active_users")
+        groups = result.get("groups", {})
+        filter_info = result.get("filter", "")
+
+        title = f"Copilot {metric.replace('_', ' ').title()} by {group_by.replace('_', ' ').title()}"
+        if filter_info:
+            title += f" (filtered: {filter_info})"
+
+        table = Table(title=title, show_lines=True)
+        table.add_column(group_by.replace("_", " ").title(), style="cyan")
+        table.add_column(metric.replace("_", " ").title(), justify="right", style="green")
+
+        for group_name, value in groups.items():
+            display_val = f"{value}%" if metric == "acceptance_rate" else str(value)
+            table.add_row(group_name, display_val)
+
+        self.console.print(table)
+        self.console.print(
+            f"\n[dim]Matched: {result.get('matched_users', 0)} / "
+            f"{result.get('total_enriched_users', 0)} users with org data[/]"
+        )
+
+        # Also render as bar chart
+        if groups:
+            max_val = max(groups.values()) if groups.values() else 1
+            bar_width = 35
+            self.console.print()
+            for name, value in groups.items():
+                bar_len = int(value / max_val * bar_width) if max_val else 0
+                bar = "█" * bar_len
+                self.console.print(f"  {name:<35} [cyan]{bar}[/] {value}")
 
     def display_error(self, message: str) -> None:
         """Display an error message."""

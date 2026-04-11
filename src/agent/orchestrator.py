@@ -1,4 +1,4 @@
-"""Main conversational agent orchestrator using Anthropic tool use."""
+"""Main conversational agent orchestrator with pluggable LLM providers."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import json
 import logging
 from typing import Any
 
-import anthropic
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
@@ -18,7 +17,10 @@ from ..github_client.metrics_api import LegacyMetricsAPI
 from ..github_client.models import UserUsageRecord
 from ..github_client.usage_metrics_api import UsageMetricsAPI
 from ..github_client.user_management_api import UserManagementAPI
+from ..orgdata.database import OrgDatabase
 from .data_analyzer import DataAnalyzer
+from .llm_provider import LLMResponse
+from .providers import create_provider
 from .response_composer import ResponseComposer
 from .tools_schema import TOOLS
 
@@ -65,10 +67,25 @@ CONTESTO CONFIGURAZIONE:
 - Enterprise: {enterprise}
 - Organization: {org}
 - API: {api_label}
+- Auth: {auth_mode}
+
+NOTA IMPORTANTE SULL'AUTENTICAZIONE:
+- Se auth_mode è "app" (GitHub App), usa SEMPRE i tool a livello organizzazione
+  (get_organization_metrics, get_user_metrics con scope=organization) perché le
+  enterprise API non sono accessibili con un'installazione App a livello org.
+- Preferisci i dati a 28 giorni (/28-day/latest) quando l'utente chiede dati recenti
+  senza una data precisa. Per date specifiche usa period=1-day con day=YYYY-MM-DD.
+- I dati 1-day richiedono il parametro 'day' (data specifica). Se l'utente chiede
+  "gli ultimi N giorni", fai N chiamate separate con period=1-day per ogni giorno,
+  oppure usa 28-day se N è grande.
 """
 
 MAX_HISTORY_MESSAGES = 40
 MAX_TOOL_ITERATIONS = 10
+# Maximum characters of a single tool result stored in conversation history.
+# Full data is always retained in self.analyzer / self.cache — this limit only
+# controls what the LLM sees to stay within the 200k-token context window.
+MAX_TOOL_RESULT_CHARS = 30_000
 
 
 class Orchestrator:
@@ -82,24 +99,62 @@ class Orchestrator:
         self.config = config
         self.console = Console()
         self.composer = ResponseComposer(self.console)
+        # Optional callback for streaming log entries to the web dashboard.
+        # When set, console output is suppressed and logs go to this callback.
+        # Signature: async (message: str) -> None
+        self._log_callback: Any = None
         self.analyzer = DataAnalyzer()
         self.cache = CacheStore(ttl_hours=config.cache_ttl_hours)
 
-        self._anthropic = anthropic.Anthropic(api_key=config.anthropic_api_key)
-        self._gh_client = GitHubBaseClient(config.github_token, config.github_api_version)
+        self._provider = create_provider(config)
+        from ..github_client import build_github_auth
+
+        self._gh_client = GitHubBaseClient(
+            build_github_auth(config), config.github_api_version
+        )
         self._usage_api = UsageMetricsAPI(self._gh_client)
         self._user_mgmt_api = UserManagementAPI(self._gh_client)
         self._legacy_api: LegacyMetricsAPI | None = None
         if config.use_legacy_api:
             self._legacy_api = LegacyMetricsAPI(self._gh_client)
 
+        # Connect to org database (SQLite)
+        self._orgdb: OrgDatabase | None = None
+        try:
+            self._orgdb = OrgDatabase()
+            emp_count = self._orgdb.employee_count()
+            if emp_count > 0:
+                mapped = self._orgdb.mapped_count()
+                logger.info(
+                    "Org database connected: %d employees, %d with GitHub ID",
+                    emp_count, mapped,
+                )
+            else:
+                logger.info("Org database connected but empty. Run 'copilot-pulse import-org' to load data.")
+        except Exception as e:
+            logger.warning("Could not connect to org database: %s", e)
+
         self._history: list[dict[str, Any]] = []
         api_label = "legacy" if config.use_legacy_api else "Usage Metrics API (nuova)"
+        org_info = ""
+        if self._orgdb and self._orgdb.employee_count() > 0:
+            emp_count = self._orgdb.employee_count()
+            mapped = self._orgdb.mapped_count()
+            org_info = (
+                f"\n\nSTRUTTURA ORGANIZZATIVA CARICATA (SQLite):\n"
+                f"- {emp_count} dipendenti nel database\n"
+                f"- {mapped} con GitHub ID associato\n"
+                f"- Campi disponibili per analisi incrociate: fascia d'età, genere, location, "
+                f"job family, job level, management level, Sup Org Level 2-10\n"
+                f"- Usa get_org_structure_summary per vedere la distribuzione\n"
+                f"- Usa analyze_org_copilot_usage per incrociare dati Copilot con struttura org"
+            )
         self._system_prompt = SYSTEM_PROMPT.format(
             enterprise=config.github_enterprise or "(non configurata)",
             org=config.github_org or "(non configurata)",
             api_label=api_label,
-        )
+            auth_mode=config.auth_mode,
+        ) + org_info
 
     async def run_interactive(self) -> None:
         """Run the interactive conversational loop."""
@@ -133,6 +188,13 @@ class Orchestrator:
 
         await self._cleanup()
 
+    async def _emit_log(self, message: str) -> None:
+        """Send a log entry to the web dashboard (if connected) or console."""
+        if self._log_callback is not None:
+            await self._log_callback(message)
+        else:
+            self.composer.display_status(message)
+
     async def ask(self, question: str) -> str:
         """Process a single question and return the text response.
 
@@ -145,72 +207,77 @@ class Orchestrator:
         self._history.append({"role": "user", "content": question})
         self._trim_history()
 
-        with self.console.status("[cyan]Analizzo la tua richiesta...[/]"):
-            response = self._call_claude()
+        await self._emit_log("Analizzo la tua richiesta...")
+        if self._log_callback is None:
+            with self.console.status("[cyan]Analizzo la tua richiesta...[/]"):
+                response = self._call_llm()
+        else:
+            response = self._call_llm()
 
         # Tool use loop
         iterations = 0
-        while response.stop_reason == "tool_use" and iterations < MAX_TOOL_ITERATIONS:
+        while response.has_tool_calls and iterations < MAX_TOOL_ITERATIONS:
             iterations += 1
-            tool_results = await self._execute_tools(response.content)
+            tool_results = await self._execute_tools(response)
 
-            self._history.append({"role": "assistant", "content": self._serialize_content(response.content)})
-            self._history.append({"role": "user", "content": tool_results})
+            self._history.append(self._provider.serialize_assistant(response))
+            self._history.append(self._provider.format_tool_results(tool_results))
 
-            with self.console.status(f"[cyan]Elaboro i risultati... (step {iterations})[/]"):
-                response = self._call_claude()
+            await self._emit_log(f"Elaboro i risultati... (step {iterations})")
+            if self._log_callback is None:
+                with self.console.status(f"[cyan]Elaboro i risultati... (step {iterations})[/]"):
+                    response = self._call_llm()
+            else:
+                response = self._call_llm()
 
-        # Extract and display final text
-        final_text = self._extract_text(response.content)
+        # Display final text
+        final_text = response.text
         self._history.append({"role": "assistant", "content": final_text})
-        self.composer.display_text(final_text)
+        if self._log_callback is None:
+            self.composer.display_text(final_text)
 
         return final_text
 
-    def _call_claude(self) -> Any:
-        """Call the Anthropic API with current history and tools."""
-        return self._anthropic.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4096,
-            system=self._system_prompt,
+    def _call_llm(self) -> LLMResponse:
+        """Call the configured LLM provider with current history and tools."""
+        return self._provider.call(
+            system_prompt=self._system_prompt,
             messages=self._history,
             tools=TOOLS,
         )
 
-    async def _execute_tools(self, content: list) -> list[dict[str, Any]]:
-        """Execute tool calls from Claude's response.
+    async def _execute_tools(self, response: LLMResponse) -> list[dict[str, Any]]:
+        """Execute tool calls from the LLM response.
 
         Args:
-            content: Response content blocks that may contain tool_use blocks.
+            response: Normalized LLM response with tool calls.
 
         Returns:
-            List of tool_result message blocks.
+            List of tool result dicts with tool_call_id and content.
         """
         results: list[dict[str, Any]] = []
 
-        for block in content:
-            if hasattr(block, "type") and block.type == "tool_use":
-                tool_name = block.name
-                tool_input = block.input
-                tool_id = block.id
+        for tc in response.tool_calls:
+            await self._emit_log(f"→ Eseguo: {tc.name}")
 
-                self.composer.display_status(f"  → Eseguo: {tool_name}")
-
-                try:
-                    result = await self._dispatch_tool(tool_name, tool_input)
-                    results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tool_id,
-                        "content": json.dumps(result, default=str),
-                    })
-                except Exception as exc:
-                    logger.error("Tool %s failed: %s", tool_name, exc)
-                    results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tool_id,
-                        "content": json.dumps({"error": str(exc)}),
-                        "is_error": True,
-                    })
+            try:
+                result = await self._dispatch_tool(tc.name, tc.arguments)
+                content = json.dumps(result, default=str)
+                # Truncate overly large tool results so the conversation
+                # stays within the LLM context window.  The full data is
+                # already loaded into self.analyzer / self.cache.
+                content = self._truncate_tool_result(content)
+                results.append({
+                    "tool_call_id": tc.id,
+                    "content": content,
+                })
+            except Exception as exc:
+                logger.error("Tool %s failed: %s", tc.name, exc)
+                results.append({
+                    "tool_call_id": tc.id,
+                    "content": json.dumps({"error": str(exc)}),
+                    "is_error": True,
+                })
 
         return results
 
@@ -241,6 +308,10 @@ class Orchestrator:
                 return self._tool_generate_chart(input_data)
             case "export_report":
                 return await self._tool_export_report(input_data)
+            case "get_org_structure_summary":
+                return self._tool_org_summary(input_data)
+            case "analyze_org_copilot_usage":
+                return self._tool_org_copilot_analysis(input_data)
             case _:
                 return {"error": f"Unknown tool: {name}"}
 
@@ -378,6 +449,10 @@ class Orchestrator:
         serialized = [u.model_dump(mode="json") for u in users]
         self.cache.set(cache_key, serialized)
 
+        # Also store in org database for cross-dimensional queries
+        if self._orgdb:
+            self._orgdb.store_usage(serialized, period=period)
+
         return {"users": serialized, "source": "api", "count": len(users)}
 
     async def _tool_seat_info(self, input_data: dict[str, Any]) -> dict[str, Any]:
@@ -408,8 +483,8 @@ class Orchestrator:
         params = input_data.get("params", {})
         result = self.analyzer.analyze(analysis_type, params)
 
-        # Also display in terminal
-        self.composer.display_analysis(result)
+        if self._log_callback is None:
+            self.composer.display_analysis(result)
         return result
 
     def _tool_generate_chart(self, input_data: dict[str, Any]) -> dict[str, Any]:
@@ -422,7 +497,7 @@ class Orchestrator:
 
         engine = ChartEngine()
 
-        if output_format in ("terminal", "all"):
+        if output_format in ("terminal", "all") and self._log_callback is None:
             engine.render_terminal(chart_type, title, data, self.console)
 
         file_path = None
@@ -453,6 +528,45 @@ class Orchestrator:
         }
 
     # ------------------------------------------------------------------
+    # Org structure tools
+    # ------------------------------------------------------------------
+
+    def _tool_org_summary(self, input_data: dict[str, Any]) -> dict[str, Any]:
+        if not self._orgdb or self._orgdb.employee_count() == 0:
+            return {"error": "Database org vuoto. Esegui 'copilot-pulse import-org <file.xlsx>' per importare i dati."}
+        summary = self._orgdb.org_summary()
+        if self._log_callback is None:
+            self.composer.display_analysis({"type": "org_summary", **summary})
+        return summary
+
+    def _tool_org_copilot_analysis(self, input_data: dict[str, Any]) -> dict[str, Any]:
+        if not self._orgdb or self._orgdb.employee_count() == 0:
+            return {"error": "Database org vuoto. Esegui 'copilot-pulse import-org <file.xlsx>' per importare i dati."}
+
+        # Check if we have usage data in the DB
+        usage_count = self._orgdb._conn.execute(
+            "SELECT COUNT(*) FROM copilot_usage"
+        ).fetchone()[0]
+        if usage_count == 0:
+            return {"error": "Nessun dato di utilizzo Copilot nel database. Usa prima get_user_metrics per recuperare i dati."}
+
+        group_by = input_data.get("group_by", "age_range")
+        metric = input_data.get("metric", "active_users")
+        filter_field = input_data.get("filter_field")
+        filter_value = input_data.get("filter_value")
+
+        result = self._orgdb.analyze_copilot_by(
+            group_by=group_by,
+            metric=metric,
+            filter_field=filter_field,
+            filter_value=filter_value,
+        )
+
+        if self._log_callback is None:
+            self.composer.display_analysis(result)
+        return result
+
+    # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
@@ -463,30 +577,39 @@ class Orchestrator:
         return CopilotDayMetrics(**d)
 
     @staticmethod
-    def _serialize_content(content: list) -> list[dict[str, Any]]:
-        """Serialize anthropic content blocks for history."""
-        serialized = []
-        for block in content:
-            if hasattr(block, "type"):
-                if block.type == "text":
-                    serialized.append({"type": "text", "text": block.text})
-                elif block.type == "tool_use":
-                    serialized.append({
-                        "type": "tool_use",
-                        "id": block.id,
-                        "name": block.name,
-                        "input": block.input,
-                    })
-        return serialized
+    def _truncate_tool_result(content: str) -> str:
+        """Truncate a serialized tool result that exceeds the size budget.
 
-    @staticmethod
-    def _extract_text(content: list) -> str:
-        """Extract text from response content blocks."""
-        texts = []
-        for block in content:
-            if hasattr(block, "type") and block.type == "text":
-                texts.append(block.text)
-        return "\n".join(texts) if texts else ""
+        For results containing large ``metrics`` or ``users`` arrays, the
+        array is trimmed to a small sample with a count annotation so the
+        LLM still understands the shape and magnitude of the data without
+        consuming excessive context.
+        """
+        if len(content) <= MAX_TOOL_RESULT_CHARS:
+            return content
+
+        try:
+            data = json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            return content[:MAX_TOOL_RESULT_CHARS] + "\n... [truncated]"
+
+        changed = False
+        for key in ("metrics", "users", "seats"):
+            if isinstance(data.get(key), list) and len(data[key]) > 5:
+                total = len(data[key])
+                data[key] = data[key][:5]
+                data[f"_{key}_note"] = (
+                    f"Showing first 5 of {total} records. "
+                    f"Full data is loaded in memory for analysis — "
+                    f"use the analyze_data tool to compute aggregates."
+                )
+                changed = True
+
+        if changed:
+            return json.dumps(data, default=str)
+
+        # Fallback: hard-truncate for result shapes we didn't anticipate.
+        return content[:MAX_TOOL_RESULT_CHARS] + "\n... [truncated]"
 
     def _trim_history(self) -> None:
         """Keep conversation history within context limits."""
@@ -526,7 +649,7 @@ class Orchestrator:
             case "/help":
                 self.console.print(
                     Panel(
-                        "[bold]/quit[/] — Esci\n"
+                        "[bold]/exit[/] · [bold]/quit[/] · [bold]/q[/] — Esci\n"
                         "[bold]/cache clear[/] — Svuota la cache\n"
                         "[bold]/dashboard[/] — Info sulla dashboard web\n"
                         "[bold]/export[/] <csv|excel|pdf> — Esporta report\n"
@@ -542,5 +665,10 @@ class Orchestrator:
 
     async def _cleanup(self) -> None:
         """Clean up resources."""
-        await self._gh_client.close()
+        try:
+            await self._gh_client.close()
+        except Exception:
+            pass
         self.cache.close()
+        if self._orgdb:
+            self._orgdb.close()

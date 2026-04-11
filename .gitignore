@@ -8,8 +8,13 @@ build/
 
 # Environment
 .env
+.env.*
+!.env.example
 .venv/
 venv/
+
+# Secrets
+*.pem
 
 # IDE
 .idea/
@@ -20,6 +25,11 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+*.xlsx
+*.png
+
+# Scripts
+run.sh
 
 # Project
 *.db

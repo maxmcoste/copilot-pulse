@@ -1,0 +1,264 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="setup-page">
+    <div class="dashboard-header">
+        <h1>{{ t.setup_title }}</h1>
+        <p class="subtitle">{{ t.setup_subtitle }}</p>
+    </div>
+
+    <!-- Stepper -->
+    <div class="setup-stepper">
+        <div class="step {% if stats.total_employees > 0 %}step-done{% else %}step-active{% endif %}" id="stepImport">
+            <div class="step-number">1</div>
+            <div class="step-label">{{ t.setup_step_import }}</div>
+        </div>
+        <div class="step-connector {% if stats.total_employees > 0 %}connector-done{% endif %}"></div>
+        <div class="step {% if stats.total_copilot_users > 0 %}step-done{% elif stats.total_employees > 0 %}step-active{% endif %}" id="stepUsage">
+            <div class="step-number">2</div>
+            <div class="step-label">{{ t.setup_step_usage }}</div>
+        </div>
+        <div class="step-connector {% if stats.total_copilot_users > 0 %}connector-done{% endif %}"></div>
+        <div class="step {% if stats.matched_copilot_users > 0 %}step-done{% elif stats.total_copilot_users > 0 %}step-active{% endif %}" id="stepMap">
+            <div class="step-number">3</div>
+            <div class="step-label">{{ t.setup_step_map }}</div>
+        </div>
+        <div class="step-connector {% if stats.match_rate > 0 %}connector-done{% endif %}"></div>
+        <div class="step {% if stats.match_rate > 50 %}step-done{% elif stats.matched_copilot_users > 0 %}step-active{% endif %}" id="stepAnalyze">
+            <div class="step-number">4</div>
+            <div class="step-label">{{ t.setup_step_analyze }}</div>
+        </div>
+    </div>
+
+    <!-- Stats Overview (always visible) -->
+    <div class="kpi-grid" id="statsPanel">
+        <div class="kpi-card">
+            <div class="kpi-value" id="statEmployees">{{ stats.total_employees }}</div>
+            <div class="kpi-label">{{ t.setup_kpi_employees }}</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-value" id="statCopilotUsers">{{ stats.total_copilot_users }}</div>
+            <div class="kpi-label">{{ t.setup_kpi_copilot_users }}</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-value" id="statMatched">{{ stats.matched_copilot_users }}</div>
+            <div class="kpi-label">{{ t.setup_kpi_matched }}</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-value {% if stats.match_rate >= 70 %}kpi-green{% elif stats.match_rate >= 40 %}kpi-yellow{% else %}kpi-red{% endif %}" id="statMatchRate">{{ stats.match_rate }}%</div>
+            <div class="kpi-label">{{ t.setup_kpi_match_rate }}</div>
+        </div>
+    </div>
+
+    <div class="setup-grid">
+        <!-- Step 1: Import Org Structure -->
+        <div class="setup-card" id="cardImport">
+            <div class="card-header">
+                <h3>{{ t.import_title }}</h3>
+                {% if stats.total_employees > 0 %}
+                <span class="status-badge status-done">{{ stats.total_employees }} {{ t.import_employees }}</span>
+                {% endif %}
+            </div>
+            <p class="card-desc">{{ t.import_desc }}</p>
+
+            <div class="upload-area" id="uploadArea">
+                <div class="upload-icon">&#128196;</div>
+                <p>{{ t.import_drag }}</p>
+                <label class="btn btn-primary upload-btn">
+                    {{ t.import_choose }}
+                    <input type="file" id="orgFileInput" accept=".xlsx,.xls" hidden>
+                </label>
+                <p class="upload-hint" id="uploadFileName"></p>
+            </div>
+
+            <div class="upload-progress" id="uploadProgress" style="display:none;">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <p class="progress-text" id="progressText">{{ t.import_importing }}</p>
+            </div>
+
+            <div class="upload-result" id="uploadResult" style="display:none;"></div>
+        </div>
+
+        <!-- Step 2: Load Copilot Usage Data -->
+        <div class="setup-card" id="cardUsage">
+            <div class="card-header">
+                <h3>{{ t.usage_title }}</h3>
+                {% if stats.total_copilot_users > 0 %}
+                <span class="status-badge status-done">{{ stats.total_copilot_users }} {{ t.usage_users }}</span>
+                {% endif %}
+            </div>
+            <p class="card-desc">{{ t.usage_desc | safe }}</p>
+            <div class="example-queries">
+                <code>{{ t.usage_example1 }}</code>
+                <code>{{ t.usage_example2 }}</code>
+            </div>
+            {% if stats.total_copilot_users == 0 %}
+            <div class="alert alert-info">
+                {{ t.usage_no_data | safe }}
+            </div>
+            {% else %}
+            <div class="alert alert-success">
+                {{ t.usage_loaded.replace('{n}', stats.total_copilot_users | string) }}
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Step 3: Map Users -->
+        <div class="setup-card" id="cardMap">
+            <div class="card-header">
+                <h3>{{ t.map_title }}</h3>
+                {% if stats.matched_copilot_users > 0 %}
+                <span class="status-badge status-done">{{ stats.matched_copilot_users }}/{{ stats.total_copilot_users }} {{ t.map_matched }}</span>
+                {% endif %}
+            </div>
+            <p class="card-desc">{{ t.map_desc }}</p>
+
+            <!-- Auto-map -->
+            <div class="map-section">
+                <h4>{{ t.map_auto_title }}</h4>
+                <p class="card-desc">{{ t.map_auto_desc | safe }}</p>
+
+                <!-- Email pattern config -->
+                <div class="pattern-config">
+                    <div class="config-row">
+                        <div class="form-group">
+                            <label>{{ t.map_pattern_label }}</label>
+                            <p class="config-hint">{{ t.map_pattern_desc }}</p>
+                            <div class="pattern-options">
+                                <label class="radio-option">
+                                    <input type="radio" name="emailPattern" value="{name}.{surname}" checked>
+                                    <span class="radio-label">
+                                        <strong>{{ t.map_pattern_ns }}</strong>
+                                        <code>mario.rossi@company.com</code>
+                                    </span>
+                                </label>
+                                <label class="radio-option">
+                                    <input type="radio" name="emailPattern" value="{surname}.{name}">
+                                    <span class="radio-label">
+                                        <strong>{{ t.map_pattern_sn }}</strong>
+                                        <code>rossi.mario@company.com</code>
+                                    </span>
+                                </label>
+                                <label class="radio-option">
+                                    <input type="radio" name="emailPattern" value="{name1}.{surname}">
+                                    <span class="radio-label">
+                                        <strong>{{ t.map_pattern_n1s }}</strong>
+                                        <code>m.rossi@company.com</code>
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="config-row">
+                        <div class="form-group">
+                            <label>{{ t.map_dup_label }}</label>
+                            <p class="config-hint">{{ t.map_dup_desc }}</p>
+                            <div class="pattern-options">
+                                <label class="radio-option">
+                                    <input type="radio" name="dupStrategy" value="skip" checked>
+                                    <span class="radio-label">{{ t.map_dup_skip }}</span>
+                                </label>
+                                <label class="radio-option">
+                                    <input type="radio" name="dupStrategy" value="seq2">
+                                    <span class="radio-label">
+                                        {{ t.map_dup_seq2 }}
+                                        <code>mario.rossi.01</code>
+                                    </span>
+                                </label>
+                                <label class="radio-option">
+                                    <input type="radio" name="dupStrategy" value="first">
+                                    <span class="radio-label">{{ t.map_dup_first }}</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <button class="btn btn-primary" id="btnAutoMap" onclick="runAutoMap()" style="margin-top:12px;">
+                    {{ t.map_auto_btn }}
+                </button>
+                <div id="autoMapResult" style="display:none;"></div>
+            </div>
+
+            <!-- Manual map -->
+            <div class="map-section">
+                <h4>{{ t.map_manual_title }}</h4>
+                <div class="manual-map-form">
+                    <div class="form-group">
+                        <label>{{ t.map_manual_search }}</label>
+                        <input type="text" id="employeeSearch" class="form-input"
+                               placeholder="{{ t.map_manual_placeholder }}"
+                               autocomplete="off">
+                        <div class="search-results" id="employeeResults" style="display:none;"></div>
+                    </div>
+                    <input type="hidden" id="selectedEmployeeId">
+                    <div class="form-group">
+                        <label>{{ t.map_manual_gh_label }}</label>
+                        <input type="text" id="githubLoginInput" class="form-input"
+                               placeholder="{{ t.map_manual_gh_placeholder }}">
+                    </div>
+                    <button class="btn btn-primary" id="btnManualMap" onclick="runManualMap()">
+                        {{ t.map_manual_btn }}
+                    </button>
+                    <div id="manualMapResult" style="display:none;"></div>
+                </div>
+            </div>
+
+            <!-- Unmatched users -->
+            <div class="map-section">
+                <h4>{{ t.map_unmatched_title }}</h4>
+                <button class="btn" id="btnShowUnmatched" onclick="loadUnmatched()">
+                    {{ t.map_unmatched_btn }}
+                </button>
+                <div id="unmatchedList" style="display:none;"></div>
+            </div>
+
+            <!-- Mapping breakdown by method -->
+            {% if stats.mappings_by_method %}
+            <div class="map-section">
+                <h4>{{ t.map_by_method_title }}</h4>
+                <table class="data-table">
+                    <thead>
+                        <tr><th>{{ t.map_th_method }}</th><th>{{ t.map_th_count }}</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for method, count in stats.mappings_by_method.items() %}
+                        <tr><td>{{ method }}</td><td>{{ count }}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Step 4: Analyze -->
+        <div class="setup-card" id="cardAnalyze">
+            <div class="card-header">
+                <h3>{{ t.analyze_title }}</h3>
+                {% if stats.match_rate > 0 %}
+                <span class="status-badge status-done">{{ t.analyze_ready }}</span>
+                {% endif %}
+            </div>
+            <p class="card-desc">{{ t.analyze_desc }}</p>
+            <div class="example-queries">
+                <code>{{ t.analyze_ex1 }}</code>
+                <code>{{ t.analyze_ex2 }}</code>
+                <code>{{ t.analyze_ex3 }}</code>
+                <code>{{ t.analyze_ex4 }}</code>
+            </div>
+            {% if stats.match_rate > 0 %}
+            <a href="/chat" class="btn btn-primary" style="margin-top:12px; display:inline-block; text-decoration:none;">
+                {{ t.analyze_go_chat }}
+            </a>
+            {% else %}
+            <div class="alert alert-info">
+                {{ t.analyze_complete_steps }}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

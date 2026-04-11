@@ -7,19 +7,19 @@
     <div class="chat-messages" id="chatMessages">
         <div class="message bot-message">
             <strong>Copilot Pulse</strong><br>
-            Ciao! Sono il tuo analista Copilot. Chiedimi qualsiasi cosa sull'utilizzo di GitHub Copilot nella tua organizzazione.
+            {{ t.chat_greeting }}
         </div>
     </div>
     <div class="chat-input-container">
-        <input type="text" id="chatInput" class="chat-input" placeholder="Scrivi una domanda..." autocomplete="off">
-        <button id="chatSend" class="btn btn-primary">Invia</button>
+        <input type="text" id="chatInput" class="chat-input" placeholder="{{ t.chat_placeholder }}" autocomplete="off">
+        <button id="chatSend" class="btn btn-primary">{{ t.chat_send }}</button>
     </div>
 </div>
 
 {% else %}
 <!-- Dashboard -->
 <div class="dashboard-header">
-    <h1>Copilot Usage Dashboard</h1>
+    <h1>{{ t.dash_title }}</h1>
     <p class="subtitle">Enterprise: {{ enterprise or 'N/A' }} · Org: {{ org or 'N/A' }}</p>
 </div>
 
@@ -27,44 +27,174 @@
 <div class="kpi-grid" id="kpiCards" hx-get="/api/metrics" hx-trigger="load" hx-swap="innerHTML">
     <div class="kpi-card">
         <div class="kpi-value">--</div>
-        <div class="kpi-label">Active Users</div>
+        <div class="kpi-label">{{ t.dash_active_users }}</div>
     </div>
     <div class="kpi-card">
         <div class="kpi-value">--</div>
-        <div class="kpi-label">Engaged Users</div>
+        <div class="kpi-label">{{ t.dash_engaged_users }}</div>
     </div>
     <div class="kpi-card">
         <div class="kpi-value">--%</div>
-        <div class="kpi-label">Acceptance Rate</div>
+        <div class="kpi-label">{{ t.dash_acceptance_rate }}</div>
     </div>
     <div class="kpi-card">
         <div class="kpi-value">--</div>
-        <div class="kpi-label">Active Seats</div>
+        <div class="kpi-label">{{ t.dash_active_seats }}</div>
     </div>
 </div>
 
-<!-- Charts -->
+<!-- Charts Row 1 -->
 <div class="charts-grid">
     <div class="chart-card">
-        <h3>Adoption Trend (28 days)</h3>
-        <div id="adoptionChart" class="chart-placeholder">Loading...</div>
+        <div class="chart-header">
+            <h3>{{ t.dash_adoption_trend }}</h3>
+            <button class="chart-help-btn" onclick="toggleChartHelp(this)" title="Info">?</button>
+        </div>
+        <div class="chart-help-text" style="display:none;">{{ t.dash_help_adoption }}</div>
+        <div id="adoptionChart" class="chart-placeholder">{{ t.dash_loading }}</div>
     </div>
     <div class="chart-card">
-        <h3>Feature Usage Distribution</h3>
-        <div id="featureChart" class="chart-placeholder">Loading...</div>
+        <div class="chart-header">
+            <h3>{{ t.dash_feature_usage }}</h3>
+            <button class="chart-help-btn" onclick="toggleChartHelp(this)" title="Info">?</button>
+        </div>
+        <div class="chart-help-text" style="display:none;">{{ t.dash_help_features }}</div>
+        <div id="featureChart" class="chart-placeholder">{{ t.dash_loading }}</div>
     </div>
 </div>
 
-<!-- Quick Chat -->
-<div class="quick-chat">
-    <h3>Quick Ask</h3>
-    <div class="quick-actions">
-        <button class="btn" onclick="quickAsk('Quanti utenti attivi abbiamo avuto questa settimana?')">Active Users</button>
-        <button class="btn" onclick="quickAsk('Qual è l\\'acceptance rate per linguaggio?')">Acceptance Rate</button>
-        <button class="btn" onclick="quickAsk('Chi sono i top 10 utenti?')">Top Users</button>
-        <button class="btn" onclick="quickAsk('Mostrami il trend degli ultimi 28 giorni')">28-Day Trend</button>
+<!-- Charts Row 2 -->
+<div class="charts-grid">
+    <div class="chart-card">
+        <div class="chart-header">
+            <h3>{{ t.dash_top_users }}</h3>
+            <button class="chart-help-btn" onclick="toggleChartHelp(this)" title="Info">?</button>
+        </div>
+        <div class="chart-help-text" style="display:none;">{{ t.dash_help_top_users }}</div>
+        <div id="topUsersChart" class="chart-placeholder">{{ t.dash_loading }}</div>
     </div>
-    <div id="quickAnswer" class="quick-answer"></div>
+    <div class="chart-card">
+        <div class="chart-header">
+            <h3>{{ t.dash_suggested_vs_accepted }}</h3>
+            <button class="chart-help-btn" onclick="toggleChartHelp(this)" title="Info">?</button>
+        </div>
+        <div class="chart-help-text" style="display:none;">{{ t.dash_help_suggested_accepted }}</div>
+        <div id="suggestedAcceptedChart" class="chart-placeholder">{{ t.dash_loading }}</div>
+    </div>
+</div>
+
+<!-- Charts Row 3 -->
+<div class="charts-grid">
+    <div class="chart-card chart-card-full">
+        <div class="chart-header">
+            <h3>{{ t.dash_usage_trend }}</h3>
+            <button class="chart-help-btn" onclick="toggleChartHelp(this)" title="Info">?</button>
+        </div>
+        <div class="chart-help-text" style="display:none;">{{ t.dash_help_usage_trend }}</div>
+        <div id="usageTrendChart" class="chart-placeholder">{{ t.dash_loading }}</div>
+    </div>
+</div>
+
+<!-- Agent Edits / User — Week over Week -->
+<div class="charts-grid">
+    <div class="chart-card chart-card-full">
+        <div class="chart-header">
+            <h3>{{ t.dash_agent_edits_wow }}</h3>
+            <button class="chart-help-btn" onclick="toggleChartHelp(this)" title="Info">?</button>
+        </div>
+        <div class="chart-help-text" style="display:none;">{{ t.dash_help_agent_edits_wow }}</div>
+        <div id="agentEditsWowChart" class="chart-placeholder">{{ t.dash_loading }}</div>
+    </div>
+</div>
+
+<!-- ROI Calculator -->
+<div class="roi-widget" id="roiWidget">
+    <div class="roi-header">
+        <h3>{{ t.roi_title }}</h3>
+        <button class="chart-help-btn" onclick="toggleChartHelp(this)" title="Info">?</button>
+    </div>
+    <div class="chart-help-text" style="display:none;">{{ t.roi_help }}</div>
+
+    <div class="roi-layout">
+        <div class="roi-params">
+            <h4>{{ t.roi_params }}</h4>
+            <div class="roi-field">
+                <label for="roiHourlyRate">{{ t.roi_hourly_rate }}</label>
+                <div class="roi-input-wrap">
+                    <input type="number" id="roiHourlyRate" value="60" min="1" step="5">
+                    <span class="roi-unit">€/h</span>
+                </div>
+            </div>
+            <div class="roi-field">
+                <label for="roiLicenseCost">{{ t.roi_license_cost }}</label>
+                <div class="roi-input-wrap">
+                    <input type="number" id="roiLicenseCost" value="39" min="1" step="1">
+                    <span class="roi-unit">€/mese</span>
+                </div>
+            </div>
+            <div class="roi-field">
+                <label for="roiMinPerEdit">{{ t.roi_min_per_edit }}</label>
+                <div class="roi-input-wrap">
+                    <input type="number" id="roiMinPerEdit" value="10" min="1" step="1">
+                    <span class="roi-unit">min</span>
+                </div>
+            </div>
+            <div class="roi-field">
+                <label for="roiReviewFactor">{{ t.roi_review_factor }}</label>
+                <div class="roi-input-wrap">
+                    <input type="number" id="roiReviewFactor" value="20" min="0" max="100" step="5">
+                    <span class="roi-unit">%</span>
+                </div>
+            </div>
+            <div class="roi-formula">
+                <strong>{{ t.roi_formula }}:</strong><br>
+                <code>Edits × (min/60) × (1 - review%) × €/h</code>
+            </div>
+        </div>
+
+        <div class="roi-results" id="roiResults">
+            <div class="roi-kpi roi-kpi-hero">
+                <div class="roi-kpi-value" id="roiMultiplier">--x</div>
+                <div class="roi-kpi-label">ROI (28d)</div>
+            </div>
+            <div class="roi-kpi">
+                <div class="roi-kpi-value" id="roiValue">--</div>
+                <div class="roi-kpi-label">{{ t.roi_estimated_value }} (28d)</div>
+            </div>
+            <div class="roi-kpi">
+                <div class="roi-kpi-value" id="roiLicenseTotal">--</div>
+                <div class="roi-kpi-label">{{ t.roi_license_total }} (28d)</div>
+            </div>
+            <div class="roi-kpi">
+                <div class="roi-kpi-value" id="roiNet">--</div>
+                <div class="roi-kpi-label">{{ t.roi_net }}</div>
+            </div>
+            <div class="roi-kpi">
+                <div class="roi-kpi-value" id="roiValuePerSeat">--</div>
+                <div class="roi-kpi-label">{{ t.roi_value_per_seat }}</div>
+            </div>
+            <div class="roi-kpi">
+                <div class="roi-kpi-value" id="roiEditsTotal">--</div>
+                <div class="roi-kpi-label">Agent Edits (28d)</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- CLI & Agent Adoption -->
+<div class="adoption-widget" id="adoptionWidget" hx-get="/api/adoption-kpis" hx-trigger="load" hx-swap="innerHTML">
+    <h3>{{ t.dash_adoption_title }}</h3>
+    <div class="adoption-grid">
+        <div class="adoption-card"><div class="adoption-value">--</div><div class="adoption-label">{{ t.dash_loading }}</div></div>
+    </div>
+</div>
+
+<!-- Quick Insights -->
+<div class="quick-insights" id="quickInsights" hx-get="/api/insights" hx-trigger="load" hx-swap="innerHTML">
+    <h3>{{ t.dash_insights_title }}</h3>
+    <div class="insights-grid">
+        <div class="insight-card"><span class="insight-value">--</span><span class="insight-label">{{ t.dash_loading }}</span></div>
+    </div>
 </div>
 {% endif %}
 {% endblock %}

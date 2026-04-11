@@ -181,4 +181,78 @@ TOOLS = [
             "required": ["format", "title"],
         },
     },
+    {
+        "name": "get_org_structure_summary",
+        "description": (
+            "Recupera un riepilogo della struttura organizzativa caricata dal file Excel: "
+            "distribuzione per fascia d'età, job family, location, livello organizzativo, genere. "
+            "Utile per capire la composizione dell'organizzazione prima di incrociare con i dati Copilot."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "analyze_org_copilot_usage",
+        "description": (
+            "Analizza l'utilizzo di Copilot incrociando i dati GitHub con la struttura organizzativa. "
+            "Permette di rispondere a domande come: utenti attivi per fascia d'età, per livello organizzativo "
+            "(Sup Org Level 2-10), per job family, per location, per genere, per management level. "
+            "Richiede che i dati utente GitHub siano già stati recuperati con get_user_metrics."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "group_by": {
+                    "type": "string",
+                    "enum": [
+                        "age_range",
+                        "gender",
+                        "location",
+                        "location_country",
+                        "job_family",
+                        "job_title",
+                        "job_level",
+                        "job_category",
+                        "management_level",
+                        "sup_org_level_2",
+                        "sup_org_level_3",
+                        "sup_org_level_4",
+                        "sup_org_level_5",
+                        "sup_org_level_6",
+                        "sup_org_level_7",
+                        "sup_org_level_8",
+                        "sup_org_level_9",
+                        "sup_org_level_10",
+                    ],
+                    "description": (
+                        "Dimensione organizzativa per cui raggruppare. "
+                        "Usa 'sup_org_level_N' per il livello N della gerarchia organizzativa."
+                    ),
+                },
+                "metric": {
+                    "type": "string",
+                    "enum": [
+                        "active_users",
+                        "total_completions",
+                        "total_chat_turns",
+                        "total_lines_accepted",
+                        "total_activity",
+                        "acceptance_rate",
+                    ],
+                    "description": "Metrica da aggregare per ciascun gruppo",
+                },
+                "filter_field": {
+                    "type": "string",
+                    "description": "Campo opzionale su cui filtrare (es: 'sup_org_level_5')",
+                },
+                "filter_value": {
+                    "type": "string",
+                    "description": "Valore del filtro (es: nome di un'unità organizzativa)",
+                },
+            },
+            "required": ["group_by"],
+        },
+    },
 ]
