@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 # In-memory cache for raw 28-day records (avoids re-fetching per chart).
 _raw_cache: dict[str, Any] = {"data": None, "ts": 0.0}
+_user_cache: dict[str, Any] = {"data": None, "ts": 0.0}
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 TEMPLATES_DIR = WEB_DIR / "templates"
@@ -56,6 +57,61 @@ def create_app(config: AppConfig) -> FastAPI:
     app.state.orchestrator = None  # Set externally before startup
 
     import time as _time
+    import openpyxl as _openpyxl
+
+    # ── Org-structure filter mapping ────────────────────────────
+    # Load github_id → sup_org_level mapping from the Excel file at startup.
+    _org_map: dict[str, dict[str, str]] = {}  # github_login -> {level6, level7, level8}
+    _org_levels: dict[str, list[str]] = {"6": [], "7": [], "8": []}  # unique sorted values
+
+    def _load_org_map() -> None:
+        """Load org mapping from org_users_mail.xlsx (if present)."""
+        xlsx_path = Path(__file__).resolve().parent.parent.parent / "org_users_mail.xlsx"
+        if not xlsx_path.exists():
+            logger.info("org_users_mail.xlsx not found — org filters disabled")
+            return
+        try:
+            wb = _openpyxl.load_workbook(str(xlsx_path), read_only=True)
+            ws = wb.active
+            sets: dict[str, set[str]] = {"6": set(), "7": set(), "8": set()}
+            for i, row in enumerate(ws.iter_rows(values_only=True)):
+                if i == 0:
+                    continue
+                gh_id = row[15]  # github_id column
+                if not gh_id:
+                    continue
+                gh_id = str(gh_id).strip().lower()
+                l6 = str(row[66] or "").strip()
+                l7 = str(row[67] or "").strip()
+                l8 = str(row[68] or "").strip()
+                _org_map[gh_id] = {"6": l6, "7": l7, "8": l8}
+                if l6:
+                    sets["6"].add(l6)
+                if l7:
+                    sets["7"].add(l7)
+                if l8:
+                    sets["8"].add(l8)
+            wb.close()
+            for lvl in ("6", "7", "8"):
+                _org_levels[lvl] = sorted(sets[lvl])
+            logger.info(
+                "Org filter map loaded: %d users, L6=%d L7=%d L8=%d values",
+                len(_org_map), len(_org_levels["6"]),
+                len(_org_levels["7"]), len(_org_levels["8"]),
+            )
+        except Exception as e:
+            logger.error("Failed to load org map: %s", e)
+
+    _load_org_map()
+
+    def _filter_logins(level: str, value: str) -> set[str]:
+        """Return the set of github logins matching a given org filter."""
+        return {
+            login for login, levels in _org_map.items()
+            if levels.get(level) == value
+        }
+
+    # ── Data fetching with caching ──────────────────────────────
 
     async def _get_raw_org_metrics() -> list[dict[str, Any]]:
         """Fetch raw (unparsed) 28-day org metrics with simple caching (5 min)."""
@@ -79,6 +135,57 @@ def create_app(config: AppConfig) -> FastAPI:
             return unwrapped
         finally:
             await client.close()
+
+    async def _get_raw_user_metrics() -> list[dict[str, Any]]:
+        """Fetch raw per-user 28-day metrics with simple caching (5 min)."""
+        now = _time.time()
+        if _user_cache["data"] is not None and now - _user_cache["ts"] < 300:
+            return _user_cache["data"]
+
+        auth = build_github_auth(config)
+        client = GitHubBaseClient(auth)
+        try:
+            resp = await client.get(
+                f"/orgs/{config.github_org}/copilot/metrics/reports/users-28-day/latest"
+            )
+            dr = ReportDownloadResponse(**resp.json())
+            raw_records: list[dict[str, Any]] = []
+            for url in dr.download_links:
+                raw_records.extend(await client.download_ndjson(url))
+            unwrapped = _unwrap_day_totals(raw_records)
+            _user_cache["data"] = unwrapped
+            _user_cache["ts"] = now
+            return unwrapped
+        finally:
+            await client.close()
+
+    def _parse_filter(request: Request) -> tuple[str | None, str | None]:
+        """Extract org filter from query params.  Returns (level, value) or (None, None)."""
+        level = request.query_params.get("filter_level")
+        value = request.query_params.get("filter_value")
+        if level and value:
+            return level, value
+        return None, None
+
+    async def _get_filtered_records(request: Request) -> tuple[list[dict[str, Any]], bool]:
+        """Return records to use — either org-level or filtered user-level.
+
+        Returns (records, is_filtered).
+        """
+        level, value = _parse_filter(request)
+        if not level or not value:
+            return await _get_raw_org_metrics(), False
+
+        logins = _filter_logins(level, value)
+        if not logins:
+            return [], True
+
+        user_records = await _get_raw_user_metrics()
+        filtered = [
+            r for r in user_records
+            if r.get("user_login", "").lower() in logins
+        ]
+        return filtered, True
 
     def _lang(request: Request) -> str:
         """Read language preference from cookie (default: en)."""
@@ -106,12 +213,43 @@ def create_app(config: AppConfig) -> FastAPI:
         response.set_cookie("lang", lang, max_age=365 * 86400, samesite="lax")
         return response
 
+    @app.get("/api/org-filters")
+    async def api_org_filters():
+        """Return available org filter values for cascading dropdowns."""
+        return {
+            "enabled": bool(_org_map),
+            "mapped_users": len(_org_map),
+            "levels": {
+                "6": _org_levels["6"],
+                "7": _org_levels["7"],
+                "8": _org_levels["8"],
+            },
+            # Child relationships: for a given level6 value, which level7s exist?
+            "children": {
+                "6": {
+                    v6: sorted({
+                        m["7"] for m in _org_map.values()
+                        if m["6"] == v6 and m["7"]
+                    })
+                    for v6 in _org_levels["6"]
+                },
+                "7": {
+                    v7: sorted({
+                        m["8"] for m in _org_map.values()
+                        if m["7"] == v7 and m["8"]
+                    })
+                    for v7 in _org_levels["7"]
+                },
+            },
+        }
+
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request):
         """Main dashboard page with KPI cards and charts."""
         return templates.TemplateResponse(
             "dashboard.html",
-            _ctx(request, title="Copilot Pulse Dashboard"),
+            _ctx(request, title="Copilot Pulse Dashboard",
+                 has_org_filters=bool(_org_map)),
         )
 
     @app.get("/chat", response_class=HTMLResponse)
@@ -127,59 +265,82 @@ def create_app(config: AppConfig) -> FastAPI:
         """Return KPI cards as an HTML fragment for HTMX swap."""
         lang = _lang(request)
         t = get_translations(lang)
-        orch = app.state.orchestrator
-        if not orch:
-            return HTMLResponse(
-                f'<div class="kpi-card"><div class="kpi-value">!</div>'
-                f'<div class="kpi-label">Agent not initialized</div></div>'
-            )
+        level, value = _parse_filter(request)
 
-        try:
-            result = await orch._tool_org_metrics({
-                "org": config.github_org,
-                "period": "28-day",
-            })
-        except Exception as e:
-            logger.error("API metrics error: %s", e)
-            return HTMLResponse(
-                f'<div class="kpi-card"><div class="kpi-value">!</div>'
-                f'<div class="kpi-label">{e}</div></div>'
-            )
-
-        metrics_list = result.get("metrics", [])
-        if not metrics_list:
-            return HTMLResponse(
-                f'<div class="kpi-card"><div class="kpi-value">0</div>'
-                f'<div class="kpi-label">{t.get("dash_active_users", "Active Users")}</div></div>'
-            )
-
-        # Use the most recent day for the headline KPIs.
-        latest = max(metrics_list, key=lambda m: m.get("date", ""))
-        active = latest.get("total_active_users", 0)
-        engaged = latest.get("total_engaged_users", 0)
-
-        # Acceptance rate from completions.
-        comp = latest.get("copilot_ide_code_completions") or {}
-        sugg = comp.get("total_code_suggestions", 0)
-        acc = comp.get("total_code_acceptances", 0)
-        rate = f"{acc / sugg * 100:.1f}%" if sugg else "N/A"
-
-        # Seat info — fetch in parallel context is tricky, just show N/A
-        # unless we can grab cached seat data.
-        seats_label = "N/A"
-        try:
-            seat_result = await orch._tool_seat_info({"org": config.github_org})
-            seat_info = seat_result.get("seat_info", {})
-            total = seat_info.get("total_seats", 0)
-            if total:
-                seats_label = str(total)
-        except Exception:
-            pass
+        if level and value:
+            # Filtered mode — compute KPIs from user-level data
+            try:
+                logins = _filter_logins(level, value)
+                user_records = await _get_raw_user_metrics()
+                filtered = [r for r in user_records if r.get("user_login", "").lower() in logins]
+                if not filtered:
+                    return HTMLResponse(
+                        f'<div class="kpi-card"><div class="kpi-value">0</div>'
+                        f'<div class="kpi-label">{t.get("dash_active_users", "Active Users")}</div></div>'
+                    )
+                unique_users = {r.get("user_login") for r in filtered if r.get("user_login")}
+                active = len(unique_users)
+                engaged = active
+                sugg, acc = 0, 0
+                for rec in filtered:
+                    for feat in rec.get("totals_by_feature", []):
+                        if feat.get("feature") == "code_completion":
+                            sugg += feat.get("code_generation_activity_count", 0)
+                            acc += feat.get("code_acceptance_activity_count", 0)
+                rate = f"{acc / sugg * 100:.1f}%" if sugg else "N/A"
+                seats_label = str(active)
+            except Exception as e:
+                logger.error("API metrics (filtered) error: %s", e)
+                return HTMLResponse(
+                    f'<div class="kpi-card"><div class="kpi-value">!</div>'
+                    f'<div class="kpi-label">{e}</div></div>'
+                )
+        else:
+            # Unfiltered mode — use org-level aggregates
+            orch = app.state.orchestrator
+            if not orch:
+                return HTMLResponse(
+                    f'<div class="kpi-card"><div class="kpi-value">!</div>'
+                    f'<div class="kpi-label">Agent not initialized</div></div>'
+                )
+            try:
+                result = await orch._tool_org_metrics({
+                    "org": config.github_org,
+                    "period": "28-day",
+                })
+            except Exception as e:
+                logger.error("API metrics error: %s", e)
+                return HTMLResponse(
+                    f'<div class="kpi-card"><div class="kpi-value">!</div>'
+                    f'<div class="kpi-label">{e}</div></div>'
+                )
+            metrics_list = result.get("metrics", [])
+            if not metrics_list:
+                return HTMLResponse(
+                    f'<div class="kpi-card"><div class="kpi-value">0</div>'
+                    f'<div class="kpi-label">{t.get("dash_active_users", "Active Users")}</div></div>'
+                )
+            latest = max(metrics_list, key=lambda m: m.get("date", ""))
+            active = latest.get("total_active_users", 0)
+            engaged = latest.get("total_engaged_users", 0)
+            comp = latest.get("copilot_ide_code_completions") or {}
+            sugg = comp.get("total_code_suggestions", 0)
+            acc = comp.get("total_code_acceptances", 0)
+            rate = f"{acc / sugg * 100:.1f}%" if sugg else "N/A"
+            seats_label = "N/A"
+            try:
+                seat_result = await orch._tool_seat_info({"org": config.github_org})
+                seat_info = seat_result.get("seat_info", {})
+                total = seat_info.get("total_seats", 0)
+                if total:
+                    seats_label = str(total)
+            except Exception:
+                pass
 
         html = (
             f'<div class="kpi-card">'
             f'  <div class="kpi-value">{active:,}</div>'
-            f'  <div class="kpi-label">{t.get("dash_active_users", "Active Users")} ({latest.get("date", "")})</div>'
+            f'  <div class="kpi-label">{t.get("dash_active_users", "Active Users")}</div>'
             f'</div>'
             f'<div class="kpi-card">'
             f'  <div class="kpi-value">{engaged:,}</div>'
@@ -197,8 +358,30 @@ def create_app(config: AppConfig) -> FastAPI:
         return HTMLResponse(html)
 
     @app.get("/api/charts/adoption")
-    async def api_chart_adoption():
+    async def api_chart_adoption(request: Request):
         """Return adoption-trend data for the Plotly line chart."""
+        level, value = _parse_filter(request)
+        if level and value:
+            # Filtered: aggregate from user-level data
+            try:
+                logins = _filter_logins(level, value)
+                user_records = await _get_raw_user_metrics()
+                filtered = [r for r in user_records if r.get("user_login", "").lower() in logins]
+                by_day: dict[str, set[str]] = {}
+                for r in filtered:
+                    day = r.get("day", "")
+                    if day:
+                        by_day.setdefault(day, set()).add(r.get("user_login", ""))
+                days_sorted = sorted(by_day.keys())
+                return {
+                    "dates": days_sorted,
+                    "active_users": [len(by_day[d]) for d in days_sorted],
+                    "engaged_users": [len(by_day[d]) for d in days_sorted],
+                }
+            except Exception as e:
+                logger.error("Chart adoption (filtered) error: %s", e)
+                return {"error": str(e)}
+
         orch = app.state.orchestrator
         if not orch:
             return {"error": "Orchestrator not initialized"}
@@ -219,20 +402,8 @@ def create_app(config: AppConfig) -> FastAPI:
             return {"error": str(e)}
 
     @app.get("/api/charts/features")
-    async def api_chart_features():
-        """Return granular feature-usage distribution (28 days).
-
-        Each ``totals_by_feature`` entry becomes its own slice.
-        Pull Requests and CLI (``totals_by_cli``) are added separately.
-
-        Metric per feature:
-        - ``code_completion`` → ``code_generation_activity_count``
-        - all others → ``user_initiated_interaction_count``
-          (falls back to ``code_generation_activity_count`` when 0)
-        - Pull Requests → ``pull_requests.total_created``
-        - CLI → ``totals_by_cli.session_count``
-        """
-        # Human-friendly labels for GA feature names
+    async def api_chart_features(request: Request):
+        """Return granular feature-usage distribution (28 days)."""
         _LABELS = {
             "code_completion": "Code Completions",
             "chat_panel_agent_mode": "Agent Mode",
@@ -247,7 +418,7 @@ def create_app(config: AppConfig) -> FastAPI:
         }
 
         try:
-            records = await _get_raw_org_metrics()
+            records, _ = await _get_filtered_records(request)
             if not records:
                 return {"labels": [], "values": []}
 
@@ -293,36 +464,34 @@ def create_app(config: AppConfig) -> FastAPI:
             return {"error": str(e)}
 
     @app.get("/api/charts/top-users")
-    async def api_chart_top_users():
+    async def api_chart_top_users(request: Request):
         """Return top 10 active users for a horizontal bar chart."""
-        orch = app.state.orchestrator
-        if not orch:
-            return {"error": "Orchestrator not initialized"}
+        level, value = _parse_filter(request)
+        filter_logins = _filter_logins(level, value) if level and value else None
+
         try:
-            result = await orch._tool_user_metrics({
-                "scope": "organization",
-                "period": "28-day",
-            })
-            users = result.get("users", [])
-            if not users:
+            user_records = await _get_raw_user_metrics()
+            if not user_records:
                 return {"logins": [], "scores": []}
 
-            # Aggregate per user across all day records
             agg: dict[str, int] = {}
-            for u in users:
-                login = u.get("github_login", "")
+            for rec in user_records:
+                login = rec.get("user_login", "")
                 if not login:
                     continue
-                score = (
-                    u.get("completions_suggestions", 0)
-                    + u.get("chat_turns", 0)
-                    + u.get("cli_turns", 0)
-                )
-                agg[login] = agg.get(login, 0) + score
+                if filter_logins is not None and login.lower() not in filter_logins:
+                    continue
+                for feat in rec.get("totals_by_feature", []):
+                    fname = feat.get("feature", "")
+                    if fname == "code_completion":
+                        agg[login] = agg.get(login, 0) + feat.get("code_generation_activity_count", 0)
+                    else:
+                        count = feat.get("user_initiated_interaction_count", 0)
+                        if count == 0:
+                            count = feat.get("code_generation_activity_count", 0)
+                        agg[login] = agg.get(login, 0) + count
 
-            # Sort descending, take top 10
             top = sorted(agg.items(), key=lambda x: x[1], reverse=True)[:10]
-            # Reverse for horizontal bar (Plotly draws bottom-up)
             top.reverse()
             return {
                 "logins": [t[0] for t in top],
@@ -333,81 +502,97 @@ def create_app(config: AppConfig) -> FastAPI:
             return {"error": str(e)}
 
     @app.get("/api/charts/suggested-accepted")
-    async def api_chart_suggested_accepted():
+    async def api_chart_suggested_accepted(request: Request):
         """Return daily suggested vs accepted code lines for the last 14 days."""
-        orch = app.state.orchestrator
-        if not orch:
-            return {"error": "Orchestrator not initialized"}
         try:
-            result = await orch._tool_org_metrics({
-                "org": config.github_org,
-                "period": "28-day",
-            })
-            metrics_list = result.get("metrics", [])
-            metrics_list.sort(key=lambda m: m.get("date", ""))
-            # Take last 14 days
-            metrics_list = metrics_list[-14:]
+            records, is_filtered = await _get_filtered_records(request)
+            if not records:
+                return {"dates": [], "suggested": [], "accepted": []}
 
-            dates = []
-            suggested = []
-            accepted = []
-            for m in metrics_list:
-                dates.append(m.get("date", ""))
-                comp = m.get("copilot_ide_code_completions") or {}
-                suggested.append(comp.get("total_code_suggestions", 0))
-                accepted.append(comp.get("total_code_acceptances", 0))
+            # Aggregate by day
+            day_sugg: dict[str, int] = {}
+            day_acc: dict[str, int] = {}
+            for rec in records:
+                day = rec.get("day", rec.get("date", ""))
+                if not day:
+                    continue
+                for feat in rec.get("totals_by_feature", []):
+                    if feat.get("feature") == "code_completion":
+                        day_sugg[day] = day_sugg.get(day, 0) + feat.get("code_generation_activity_count", 0)
+                        day_acc[day] = day_acc.get(day, 0) + feat.get("code_acceptance_activity_count", 0)
+                if not is_filtered:
+                    comp = rec.get("copilot_ide_code_completions") or {}
+                    s = comp.get("total_code_suggestions", 0)
+                    a = comp.get("total_code_acceptances", 0)
+                    if s:
+                        day_sugg[day] = s
+                        day_acc[day] = a
 
-            return {"dates": dates, "suggested": suggested, "accepted": accepted}
+            days_sorted = sorted(day_sugg.keys())[-14:]
+            return {
+                "dates": days_sorted,
+                "suggested": [day_sugg.get(d, 0) for d in days_sorted],
+                "accepted": [day_acc.get(d, 0) for d in days_sorted],
+            }
         except Exception as e:
             logger.error("Chart suggested-accepted error: %s", e)
             return {"error": str(e)}
 
     @app.get("/api/charts/usage-trend")
-    async def api_chart_usage_trend():
-        """Return 28-day composite usage score trend.
-
-        Usage Score = code_suggestions + chat_messages + PR_summaries + CLI_interactions.
-        """
-        orch = app.state.orchestrator
-        if not orch:
-            return {"error": "Orchestrator not initialized"}
+    async def api_chart_usage_trend(request: Request):
+        """Return 28-day composite usage score trend."""
         try:
-            result = await orch._tool_org_metrics({
-                "org": config.github_org,
-                "period": "28-day",
-            })
-            metrics_list = result.get("metrics", [])
-            metrics_list.sort(key=lambda m: m.get("date", ""))
+            records, is_filtered = await _get_filtered_records(request)
+            if not records:
+                return {"dates": [], "scores": []}
 
-            dates = []
-            scores = []
-            for m in metrics_list:
-                dates.append(m.get("date", ""))
-                comp = m.get("copilot_ide_code_completions") or {}
-                ide_chat = m.get("copilot_ide_chat") or {}
-                dot_chat = m.get("copilot_dotcom_chat") or {}
-                pr = m.get("copilot_dotcom_pull_requests") or {}
-                cli = m.get("copilot_cli") or {}
+            day_scores: dict[str, int] = {}
+            for rec in records:
+                day = rec.get("day", rec.get("date", ""))
+                if not day:
+                    continue
+                score = 0
+                for feat in rec.get("totals_by_feature", []):
+                    fname = feat.get("feature", "")
+                    if fname == "code_completion":
+                        score += feat.get("code_generation_activity_count", 0)
+                    else:
+                        s = feat.get("user_initiated_interaction_count", 0)
+                        if s == 0:
+                            s = feat.get("code_generation_activity_count", 0)
+                        score += s
+                if not is_filtered:
+                    # Use org-level aggregate fields if available
+                    comp = rec.get("copilot_ide_code_completions") or {}
+                    ide_chat = rec.get("copilot_ide_chat") or {}
+                    dot_chat = rec.get("copilot_dotcom_chat") or {}
+                    pr = rec.get("copilot_dotcom_pull_requests") or {}
+                    cli = rec.get("copilot_cli") or {}
+                    org_score = (
+                        comp.get("total_code_suggestions", 0)
+                        + ide_chat.get("total_chats", 0)
+                        + dot_chat.get("total_chats", 0)
+                        + pr.get("total_pr_summaries_created", 0)
+                        + cli.get("total_chats", 0)
+                    )
+                    if org_score:
+                        score = org_score
+                day_scores[day] = day_scores.get(day, 0) + score
 
-                score = (
-                    comp.get("total_code_suggestions", 0)
-                    + ide_chat.get("total_chats", 0)
-                    + dot_chat.get("total_chats", 0)
-                    + pr.get("total_pr_summaries_created", 0)
-                    + cli.get("total_chats", 0)
-                )
-                scores.append(score)
-
-            return {"dates": dates, "scores": scores}
+            days_sorted = sorted(day_scores.keys())
+            return {
+                "dates": days_sorted,
+                "scores": [day_scores[d] for d in days_sorted],
+            }
         except Exception as e:
             logger.error("Chart usage-trend error: %s", e)
             return {"error": str(e)}
 
     @app.get("/api/roi-data")
-    async def api_roi_data():
+    async def api_roi_data(request: Request):
         """Return raw data for the client-side ROI calculator."""
         try:
-            records = await _get_raw_org_metrics()
+            records, is_filtered = await _get_filtered_records(request)
             if not records:
                 return {"agent_edits": 0, "total_seats": 0, "days": 0}
 
@@ -417,25 +602,31 @@ def create_app(config: AppConfig) -> FastAPI:
                     if feat.get("feature") == "agent_edit":
                         agent_edits += feat.get("code_generation_activity_count", 0)
 
-            latest = sorted(records, key=lambda r: r.get("day", ""))[-1]
-            active_users = latest.get("monthly_active_users", 0)
-
-            # Seat count
-            total_seats = 0
-            orch = app.state.orchestrator
-            if orch:
-                try:
-                    seat_result = await orch._tool_seat_info({"org": config.github_org})
-                    si = seat_result.get("seat_info", {})
-                    total_seats = si.get("total_seats", 0)
-                except Exception:
-                    pass
+            if is_filtered:
+                unique_users = {r.get("user_login") for r in records if r.get("user_login")}
+                active_users = len(unique_users)
+                total_seats = active_users
+                unique_days = {r.get("day") for r in records if r.get("day")}
+                days = len(unique_days)
+            else:
+                latest = sorted(records, key=lambda r: r.get("day", ""))[-1]
+                active_users = latest.get("monthly_active_users", 0)
+                days = len(records)
+                total_seats = 0
+                orch = app.state.orchestrator
+                if orch:
+                    try:
+                        seat_result = await orch._tool_seat_info({"org": config.github_org})
+                        si = seat_result.get("seat_info", {})
+                        total_seats = si.get("total_seats", 0)
+                    except Exception:
+                        pass
 
             return {
                 "agent_edits": agent_edits,
                 "total_seats": total_seats,
                 "active_users": active_users,
-                "days": len(records),
+                "days": days,
             }
         except Exception as e:
             logger.error("ROI data error: %s", e)
@@ -529,7 +720,7 @@ def create_app(config: AppConfig) -> FastAPI:
         t = get_translations(lang)
         title = t.get("dash_adoption_title", "CLI & Agent Adoption")
         try:
-            records = await _get_raw_org_metrics()
+            records, _ = await _get_filtered_records(request)
         except Exception as e:
             logger.error("Adoption KPIs error: %s", e)
             return HTMLResponse(
@@ -546,9 +737,18 @@ def create_app(config: AppConfig) -> FastAPI:
         sorted_recs = sorted(records, key=lambda r: r.get("day", ""))
         latest = sorted_recs[-1]
         total_users = latest.get("monthly_active_users", 0)
+        # For filtered (user-level) data, compute counts from unique logins
+        if not total_users:
+            total_users = len({r.get("user_login") for r in sorted_recs if r.get("user_login")})
 
-        # 1. CLI Users (28-day rolling from latest day)
+        # 1. CLI Users
         cli_users = latest.get("daily_active_cli_users", 0)
+        if not cli_users:
+            cli_users = len({
+                r.get("user_login") for r in sorted_recs
+                if r.get("user_login") and isinstance(r.get("totals_by_cli"), dict)
+                and r["totals_by_cli"].get("session_count", 0) > 0
+            })
         cli_users_pct = f"({cli_users / total_users * 100:.0f}%)" if total_users else ""
 
         # 2. CLI Sessions (28-day total)
@@ -558,8 +758,16 @@ def create_app(config: AppConfig) -> FastAPI:
             if isinstance(c, dict):
                 cli_sessions += c.get("session_count", 0)
 
-        # 3. Agent Users (28-day rolling from latest day)
+        # 3. Agent Users
         agent_users = latest.get("monthly_active_agent_users", 0)
+        if not agent_users:
+            agent_users = len({
+                r.get("user_login") for r in sorted_recs
+                if r.get("user_login") and any(
+                    f.get("feature") == "agent_edit" and f.get("code_generation_activity_count", 0) > 0
+                    for f in r.get("totals_by_feature", [])
+                )
+            })
         agent_users_pct = f"({agent_users / total_users * 100:.0f}%)" if total_users else ""
 
         # 4. CLI Total Tokens (28-day)
@@ -657,7 +865,7 @@ def create_app(config: AppConfig) -> FastAPI:
         lang = _lang(request)
         t = get_translations(lang)
         try:
-            records = await _get_raw_org_metrics()
+            records, _ = await _get_filtered_records(request)
         except Exception as e:
             logger.error("Insights error: %s", e)
             return HTMLResponse(
@@ -712,9 +920,19 @@ def create_app(config: AppConfig) -> FastAPI:
 
         # --- Most active day ---
         day_activity: dict[str, int] = {}
+        day_users: dict[str, set[str]] = {}
         for rec in sorted_recs:
             day = rec.get("day", "")
-            day_activity[day] = rec.get("daily_active_users", 0)
+            dau = rec.get("daily_active_users", 0)
+            if dau:
+                day_activity[day] = dau
+            else:
+                # User-level records: count unique logins per day
+                login = rec.get("user_login", "")
+                if login:
+                    day_users.setdefault(day, set()).add(login)
+        if not day_activity and day_users:
+            day_activity = {d: len(u) for d, u in day_users.items()}
         best_day = max(day_activity, key=day_activity.get) if day_activity else "N/A"
         best_day_users = day_activity.get(best_day, 0)
 

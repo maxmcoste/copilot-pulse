@@ -540,8 +540,10 @@ function initDashboardCharts() {
         legend: { orientation: 'h', y: -0.2 },
     };
 
+    var qs = (typeof filterQueryString === 'function') ? filterQueryString() : '';
+
     if (adoptionEl) {
-        fetch('/api/charts/adoption')
+        fetch('/api/charts/adoption' + qs)
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.error) {
@@ -575,7 +577,7 @@ function initDashboardCharts() {
     }
 
     if (featureEl) {
-        fetch('/api/charts/features')
+        fetch('/api/charts/features' + qs)
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.error) {
@@ -612,7 +614,7 @@ function initDashboardCharts() {
 
     // ── Top 10 Active Users (horizontal bar) ──
     if (topUsersEl) {
-        fetch('/api/charts/top-users')
+        fetch('/api/charts/top-users' + qs)
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.error) { topUsersEl.textContent = data.error; return; }
@@ -644,7 +646,7 @@ function initDashboardCharts() {
 
     // ── Suggested vs Accepted Code (14 days) ──
     if (sugAccEl) {
-        fetch('/api/charts/suggested-accepted')
+        fetch('/api/charts/suggested-accepted' + qs)
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.error) { sugAccEl.textContent = data.error; return; }
@@ -684,7 +686,7 @@ function initDashboardCharts() {
 
     // ── 28-Day Usage Trend (composite score) ──
     if (usageTrendEl) {
-        fetch('/api/charts/usage-trend')
+        fetch('/api/charts/usage-trend' + qs)
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.error) { usageTrendEl.textContent = data.error; return; }
@@ -715,7 +717,7 @@ function initDashboardCharts() {
 
     // ── Agent Edits / User — Week over Week (bar chart) ──
     if (agentWowEl) {
-        fetch('/api/charts/agent-edits-wow')
+        fetch('/api/charts/agent-edits-wow' + qs)
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.error) { agentWowEl.textContent = data.error; return; }
@@ -820,7 +822,8 @@ function initROI() {
     });
 
     // Fetch data
-    fetch('/api/roi-data')
+    var qs = (typeof filterQueryString === 'function') ? filterQueryString() : '';
+    fetch('/api/roi-data' + qs)
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data.error) return;
@@ -829,11 +832,153 @@ function initROI() {
         });
 }
 
+// ── Org Filters ─────────────────────────────────────────────
+
+var _orgFilterData = null; // cached from /api/org-filters
+var _activeFilter = { level: null, value: null };
+
+function initOrgFilters() {
+    var bar = document.getElementById('orgFilterBar');
+    if (!bar) return;
+
+    var sel6 = document.getElementById('filterLevel6');
+    var sel7 = document.getElementById('filterLevel7');
+    var sel8 = document.getElementById('filterLevel8');
+    var resetBtn = document.getElementById('filterReset');
+
+    fetch('/api/org-filters')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data.enabled) { bar.style.display = 'none'; return; }
+            _orgFilterData = data;
+
+            // Populate level 6
+            data.levels['6'].forEach(function(v) {
+                var opt = document.createElement('option');
+                opt.value = v; opt.textContent = v;
+                sel6.appendChild(opt);
+            });
+        });
+
+    sel6.addEventListener('change', function() {
+        sel7.innerHTML = '<option value="">— Level 7 —</option>';
+        sel8.innerHTML = '<option value="">— Level 8 —</option>';
+        sel7.disabled = true;
+        sel8.disabled = true;
+
+        if (!this.value) {
+            _activeFilter = { level: null, value: null };
+            resetBtn.style.display = 'none';
+            refreshDashboard();
+            return;
+        }
+
+        _activeFilter = { level: '6', value: this.value };
+        resetBtn.style.display = '';
+
+        // Populate level 7 children
+        var children7 = (_orgFilterData.children['6'] || {})[this.value] || [];
+        if (children7.length > 0) {
+            sel7.disabled = false;
+            children7.forEach(function(v) {
+                var opt = document.createElement('option');
+                opt.value = v; opt.textContent = v;
+                sel7.appendChild(opt);
+            });
+        }
+        refreshDashboard();
+    });
+
+    sel7.addEventListener('change', function() {
+        sel8.innerHTML = '<option value="">— Level 8 —</option>';
+        sel8.disabled = true;
+
+        if (!this.value) {
+            _activeFilter = { level: '6', value: sel6.value };
+            refreshDashboard();
+            return;
+        }
+
+        _activeFilter = { level: '7', value: this.value };
+
+        // Populate level 8 children
+        var children8 = (_orgFilterData.children['7'] || {})[this.value] || [];
+        if (children8.length > 0) {
+            sel8.disabled = false;
+            children8.forEach(function(v) {
+                var opt = document.createElement('option');
+                opt.value = v; opt.textContent = v;
+                sel8.appendChild(opt);
+            });
+        }
+        refreshDashboard();
+    });
+
+    sel8.addEventListener('change', function() {
+        if (!this.value) {
+            _activeFilter = { level: '7', value: sel7.value };
+        } else {
+            _activeFilter = { level: '8', value: this.value };
+        }
+        refreshDashboard();
+    });
+
+    resetBtn.addEventListener('click', function() {
+        sel6.value = '';
+        sel7.innerHTML = '<option value="">— Level 7 —</option>';
+        sel8.innerHTML = '<option value="">— Level 8 —</option>';
+        sel7.disabled = true;
+        sel8.disabled = true;
+        _activeFilter = { level: null, value: null };
+        resetBtn.style.display = 'none';
+        refreshDashboard();
+    });
+}
+
+function filterQueryString() {
+    if (!_activeFilter.level || !_activeFilter.value) return '';
+    return '?filter_level=' + encodeURIComponent(_activeFilter.level) +
+           '&filter_value=' + encodeURIComponent(_activeFilter.value);
+}
+
+function refreshDashboard() {
+    var qs = filterQueryString();
+
+    // Refresh KPIs via HTMX
+    var kpiEl = document.getElementById('kpiCards');
+    if (kpiEl) {
+        kpiEl.innerHTML = '<div class="kpi-card"><div class="kpi-value">…</div><div class="kpi-label">Loading</div></div>';
+        fetch('/api/metrics' + qs).then(function(r) { return r.text(); }).then(function(html) {
+            kpiEl.innerHTML = html;
+        });
+    }
+
+    // Refresh HTMX widgets
+    var adoptionEl = document.getElementById('adoptionWidget');
+    if (adoptionEl) {
+        fetch('/api/adoption-kpis' + qs).then(function(r) { return r.text(); }).then(function(html) {
+            adoptionEl.innerHTML = html;
+        });
+    }
+    var insightsEl = document.getElementById('quickInsights');
+    if (insightsEl) {
+        fetch('/api/insights' + qs).then(function(r) { return r.text(); }).then(function(html) {
+            insightsEl.innerHTML = html;
+        });
+    }
+
+    // Refresh all charts
+    initDashboardCharts();
+    // Refresh ROI
+    initROI();
+}
+
 // ── Initialize ──────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', function() {
     initChat();
     initSetup();
+    initOrgFilters();
     initDashboardCharts();
     initROI();
 });

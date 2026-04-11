@@ -19,8 +19,27 @@
 {% else %}
 <!-- Dashboard -->
 <div class="dashboard-header">
-    <h1>{{ t.dash_title }}</h1>
-    <p class="subtitle">Enterprise: {{ enterprise or 'N/A' }} · Org: {{ org or 'N/A' }}</p>
+    <div class="dashboard-header-top">
+        <div>
+            <h1>{{ t.dash_title }}</h1>
+            <p class="subtitle">Enterprise: {{ enterprise or 'N/A' }} · Org: {{ org or 'N/A' }}</p>
+        </div>
+        {% if has_org_filters %}
+        <div class="org-filter-bar" id="orgFilterBar">
+            <label class="filter-label">Filter:</label>
+            <select id="filterLevel6" class="filter-select">
+                <option value="">All users</option>
+            </select>
+            <select id="filterLevel7" class="filter-select" disabled>
+                <option value="">— Level 7 —</option>
+            </select>
+            <select id="filterLevel8" class="filter-select" disabled>
+                <option value="">— Level 8 —</option>
+            </select>
+            <button id="filterReset" class="filter-reset-btn" style="display:none" title="Reset filter">✕</button>
+        </div>
+        {% endif %}
+    </div>
 </div>
 
 <!-- KPI Cards -->
