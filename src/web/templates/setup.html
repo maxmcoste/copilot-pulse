@@ -71,6 +71,15 @@
                 <p class="upload-hint" id="uploadFileName"></p>
             </div>
 
+            <div class="import-actions" id="importActions" style="display:none;">
+                <label class="refresh-all-option">
+                    <input type="checkbox" id="refreshAll">
+                    <span>{{ t.import_refresh_all }}</span>
+                    <span class="refresh-all-hint" id="refreshAllHint" style="display:none;">{{ t.import_refresh_hint }}</span>
+                </label>
+                <button class="btn btn-primary" id="btnAnalyze" onclick="openImportPreview()">{{ t.import_analyze }}</button>
+            </div>
+
             <div class="upload-progress" id="uploadProgress" style="display:none;">
                 <div class="progress-bar">
                     <div class="progress-fill" id="progressFill"></div>
@@ -258,6 +267,46 @@
                 {{ t.analyze_complete_steps }}
             </div>
             {% endif %}
+        </div>
+    </div>
+
+    <!-- ── Import Preview Overlay (position:fixed — DOM position irrelevant) -->
+    <div id="importPreviewOverlay" class="import-preview-overlay hidden" role="dialog" aria-modal="true">
+        <div class="import-preview-modal">
+
+            <div class="import-preview-header">
+                <span id="previewTitle">{{ t.import_preview_title }}</span>
+                <button class="import-preview-close" onclick="closeImportPreview()" aria-label="Chiudi">&#x2715;</button>
+            </div>
+
+            <div id="previewMissingAlert" class="import-missing-alert hidden"></div>
+
+            <div class="import-preview-section">
+                <div class="import-preview-section-title">
+                    {{ t.import_col_list_title }}
+                    <span class="import-col-legend">
+                        <span class="import-col-badge badge-required">{{ t.import_col_required }}</span>
+                        <span class="import-col-badge badge-mapped">{{ t.import_col_mapped }}</span>
+                        <span class="import-col-badge badge-unmapped">{{ t.import_col_unmapped }}</span>
+                    </span>
+                </div>
+                <div class="import-col-list" id="previewColList"></div>
+            </div>
+
+            <div class="import-preview-section">
+                <div class="import-preview-section-title">
+                    {{ t.import_sample_preview }}
+                    <span id="previewSampleCount" style="font-weight:normal;font-size:0.85em;"></span>
+                </div>
+                <div class="import-sample-wrapper">
+                    <table class="import-sample-table" id="previewSampleTable"></table>
+                </div>
+            </div>
+
+            <div class="import-preview-footer">
+                <button class="btn" onclick="closeImportPreview()">{{ t.import_cancel }}</button>
+                <button class="btn btn-primary" id="btnProceedImport" onclick="confirmImport()">{{ t.import_proceed }}</button>
+            </div>
         </div>
     </div>
 </div>

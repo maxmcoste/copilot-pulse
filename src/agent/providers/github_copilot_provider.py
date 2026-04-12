@@ -13,7 +13,7 @@ from .schema_converter import anthropic_to_openai_messages, anthropic_to_openai_
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ENDPOINT = "https://models.github.com/chat/completions"
+DEFAULT_ENDPOINT = "https://models.inference.ai.azure.com/chat/completions"
 DEFAULT_MODEL = "gpt-4o"
 
 

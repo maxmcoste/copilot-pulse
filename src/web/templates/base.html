@@ -8,7 +8,7 @@
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=21">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=29">
 </head>
 <body>
     <nav class="navbar">
@@ -19,6 +19,7 @@
             <a href="/" class="{% if not active_tab %}active{% endif %}">{{ t.nav_dashboard }}</a>
             <a href="/chat" class="{% if active_tab == 'chat' %}active{% endif %}">{{ t.nav_chat }}</a>
             <a href="/setup" class="{% if active_tab == 'setup' %}active{% endif %}">{{ t.nav_setup }}</a>
+            <a href="/settings" class="{% if active_tab == 'settings' %}active{% endif %}">⚙ {{ t.nav_settings }}</a>
         </div>
         <div class="nav-info">
             {% if enterprise %}<span class="badge">{{ enterprise }}</span>{% endif %}
@@ -38,6 +39,6 @@
         // Pass translations to JavaScript for dynamic content
         window.T = {{ t | tojson }};
     </script>
-    <script src="/static/js/app.js?v=21"></script>
+    <script src="/static/js/app.js?v=29"></script>
 </body>
 </html>

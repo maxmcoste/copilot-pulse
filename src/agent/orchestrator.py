@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date, timedelta
 from typing import Any
 
 from rich.console import Console
@@ -240,8 +241,15 @@ class Orchestrator:
 
     def _call_llm(self) -> LLMResponse:
         """Call the configured LLM provider with current history and tools."""
+        today = date.today()
+        yesterday = today - timedelta(days=1)
+        date_context = (
+            f"\n\nDATA CORRENTE: {today.isoformat()} "
+            f"(ieri: {yesterday.isoformat()}). "
+            f"Usa sempre queste date quando l'utente menziona 'oggi', 'ieri', 'questa settimana', ecc."
+        )
         return self._provider.call(
-            system_prompt=self._system_prompt,
+            system_prompt=self._system_prompt + date_context,
             messages=self._history,
             tools=TOOLS,
         )

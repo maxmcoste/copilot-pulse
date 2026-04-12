@@ -19,8 +19,33 @@
 {% else %}
 <!-- Dashboard -->
 <div class="dashboard-header">
-    <h1>{{ t.dash_title }}</h1>
-    <p class="subtitle">Enterprise: {{ enterprise or 'N/A' }} · Org: {{ org or 'N/A' }}</p>
+    <div class="dashboard-header-top">
+        <div>
+            <h1>{{ t.dash_title }}</h1>
+            <p class="subtitle">Enterprise: {{ enterprise or 'N/A' }} · Org: {{ org or 'N/A' }}</p>
+        </div>
+        {% if has_org_filters %}
+        <div class="org-filter-bar" id="orgFilterBar">
+            <label class="filter-label">Filter:</label>
+            <select id="filterLevel4" class="filter-select">
+                <option value="">All users</option>
+            </select>
+            <select id="filterLevel5" class="filter-select" disabled>
+                <option value="">— Level 5 —</option>
+            </select>
+            <select id="filterLevel6" class="filter-select" disabled>
+                <option value="">— Level 6 —</option>
+            </select>
+            <select id="filterLevel7" class="filter-select" disabled>
+                <option value="">— Level 7 —</option>
+            </select>
+            <select id="filterLevel8" class="filter-select" disabled>
+                <option value="">— Level 8 —</option>
+            </select>
+            <button id="filterReset" class="filter-reset-btn" style="display:none" title="Reset filter">✕</button>
+        </div>
+        {% endif %}
+    </div>
 </div>
 
 <!-- KPI Cards -->
@@ -95,18 +120,6 @@
     </div>
 </div>
 
-<!-- Agent Edits / User — Week over Week -->
-<div class="charts-grid">
-    <div class="chart-card chart-card-full">
-        <div class="chart-header">
-            <h3>{{ t.dash_agent_edits_wow }}</h3>
-            <button class="chart-help-btn" onclick="toggleChartHelp(this)" title="Info">?</button>
-        </div>
-        <div class="chart-help-text" style="display:none;">{{ t.dash_help_agent_edits_wow }}</div>
-        <div id="agentEditsWowChart" class="chart-placeholder">{{ t.dash_loading }}</div>
-    </div>
-</div>
-
 <!-- ROI Calculator -->
 <div class="roi-widget" id="roiWidget">
     <div class="roi-header">
@@ -121,7 +134,7 @@
             <div class="roi-field">
                 <label for="roiHourlyRate">{{ t.roi_hourly_rate }}</label>
                 <div class="roi-input-wrap">
-                    <input type="number" id="roiHourlyRate" value="60" min="1" step="5">
+                    <input type="number" id="roiHourlyRate" value="28" min="1" step="5">
                     <span class="roi-unit">€/h</span>
                 </div>
             </div>
@@ -186,6 +199,46 @@
     <h3>{{ t.dash_adoption_title }}</h3>
     <div class="adoption-grid">
         <div class="adoption-card"><div class="adoption-value">--</div><div class="adoption-label">{{ t.dash_loading }}</div></div>
+    </div>
+</div>
+
+<!-- Productivity Insights -->
+<div class="productivity-widget">
+    <div class="productivity-header">
+        <div>
+            <h3>{{ t.dash_productivity_title }}</h3>
+            <p class="productivity-subtitle">{{ t.dash_productivity_subtitle }}</p>
+        </div>
+    </div>
+    <div class="productivity-grid" id="productivityCards" hx-get="/api/productivity-insights" hx-trigger="load" hx-swap="innerHTML">
+        <div class="productivity-card">
+            <div class="productivity-value">--</div>
+            <div class="productivity-label">{{ t.dash_loading }}</div>
+        </div>
+        <div class="productivity-card">
+            <div class="productivity-value">--</div>
+            <div class="productivity-label">{{ t.dash_loading }}</div>
+        </div>
+    </div>
+    <div class="productivity-charts-grid">
+        <div class="productivity-chart-card">
+            <div class="chart-header">
+                <h3>{{ t.dash_productivity_trend }}</h3>
+                <button class="chart-help-btn" onclick="toggleChartHelp(this)" title="Info">?</button>
+            </div>
+            <div class="chart-help-text" style="display:none;">{{ t.dash_help_productivity_trend }}</div>
+            <div id="productivityTrendChart" class="chart-placeholder">{{ t.dash_loading }}</div>
+            <div class="productivity-scale" id="productivityTrendLegend" aria-label="Productivity trend legend"></div>
+        </div>
+        <div class="productivity-chart-card">
+            <div class="chart-header">
+                <h3>{{ t.dash_productivity_trend_seats }}</h3>
+                <button class="chart-help-btn" onclick="toggleChartHelp(this)" title="Info">?</button>
+            </div>
+            <div class="chart-help-text" style="display:none;">{{ t.dash_help_productivity_trend_seats }}</div>
+            <div id="productivityTrendSeatsChart" class="chart-placeholder">{{ t.dash_loading }}</div>
+            <div class="productivity-scale" id="productivityTrendSeatsLegend" aria-label="Productivity seats trend legend"></div>
+        </div>
     </div>
 </div>
 

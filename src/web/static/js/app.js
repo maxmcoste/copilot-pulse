@@ -243,20 +243,26 @@ function removeTyping() {
 
 // ── Setup Page ──────────────────────────────────────────────
 
+var _pendingOrgFile = null;
+var _uploadSessionId = null;
+var _previewColumns = [];
+
 function initSetup() {
-    const fileInput = document.getElementById('orgFileInput');
-    const uploadArea = document.getElementById('uploadArea');
+    var fileInput = document.getElementById('orgFileInput');
+    var uploadArea = document.getElementById('uploadArea');
     if (!fileInput || !uploadArea) return;
 
-    // File input change
+    // File input change — stage file, don't upload yet
     fileInput.addEventListener('change', function() {
         if (this.files.length > 0) {
+            _pendingOrgFile = this.files[0];
             document.getElementById('uploadFileName').textContent = this.files[0].name;
-            uploadOrgFile(this.files[0]);
+            document.getElementById('importActions').style.display = '';
+            document.getElementById('uploadResult').style.display = 'none';
         }
     });
 
-    // Drag & drop
+    // Drag & drop — stage file
     uploadArea.addEventListener('dragover', function(e) {
         e.preventDefault();
         this.classList.add('drag-over');
@@ -267,12 +273,23 @@ function initSetup() {
     uploadArea.addEventListener('drop', function(e) {
         e.preventDefault();
         this.classList.remove('drag-over');
-        const file = e.dataTransfer.files[0];
+        var file = e.dataTransfer.files[0];
         if (file && (file.name.endsWith('.xlsx') || file.name.endsWith('.xls'))) {
+            _pendingOrgFile = file;
             document.getElementById('uploadFileName').textContent = file.name;
-            uploadOrgFile(file);
+            document.getElementById('importActions').style.display = '';
+            document.getElementById('uploadResult').style.display = 'none';
         }
     });
+
+    // Toggle warning visibility when checkbox changes
+    var refreshAllCb = document.getElementById('refreshAll');
+    if (refreshAllCb) {
+        refreshAllCb.addEventListener('change', function() {
+            var hint = document.getElementById('refreshAllHint');
+            if (hint) hint.style.display = this.checked ? '' : 'none';
+        });
+    }
 
     // Employee search autocomplete
     const searchInput = document.getElementById('employeeSearch');
@@ -290,35 +307,201 @@ function initSetup() {
     }
 }
 
-async function uploadOrgFile(file) {
-    const progressDiv = document.getElementById('uploadProgress');
-    const resultDiv = document.getElementById('uploadResult');
-    const progressFill = document.getElementById('progressFill');
-    const progressText = document.getElementById('progressText');
+async function openImportPreview() {
+    if (!_pendingOrgFile) return;
 
+    var btn = document.getElementById('btnAnalyze');
+    if (btn) btn.disabled = true;
+
+    var progressDiv = document.getElementById('uploadProgress');
+    var progressFill = document.getElementById('progressFill');
+    var progressText = document.getElementById('progressText');
+    progressDiv.style.display = 'block';
+    progressFill.style.width = '40%';
+    progressText.textContent = T().import_analyzing || 'Analyzing structure...';
+
+    try {
+        var formData = new FormData();
+        formData.append('file', _pendingOrgFile);
+        var resp = await fetch('/api/preview-org', { method: 'POST', body: formData });
+        var data = await resp.json();
+
+        if (data.error) {
+            progressText.textContent = T().import_error || 'Error';
+            progressFill.style.width = '100%';
+            var resultDiv = document.getElementById('uploadResult');
+            resultDiv.style.display = 'block';
+            resultDiv.className = 'upload-result alert alert-error';
+            resultDiv.textContent = data.error;
+            return;
+        }
+
+        progressDiv.style.display = 'none';
+        _uploadSessionId = data.session_id;
+        _previewColumns = data.columns;
+        _renderPreviewOverlay(data);
+        document.getElementById('importPreviewOverlay').classList.remove('hidden');
+    } catch (e) {
+        progressFill.style.width = '100%';
+        progressText.textContent = T().import_error || 'Error';
+        var resultDiv = document.getElementById('uploadResult');
+        resultDiv.style.display = 'block';
+        resultDiv.className = 'upload-result alert alert-error';
+        resultDiv.textContent = e.message;
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+function closeImportPreview() {
+    document.getElementById('importPreviewOverlay').classList.add('hidden');
+}
+
+function _renderPreviewOverlay(data) {
+    var t = T();
+    // Title
+    document.getElementById('previewTitle').textContent =
+        (t.import_preview_title || 'Column preview') + ': ' + (_pendingOrgFile ? _pendingOrgFile.name : '');
+
+    // Missing required fields alert
+    var alertEl = document.getElementById('previewMissingAlert');
+    if (data.missing_required && data.missing_required.length > 0) {
+        alertEl.classList.remove('hidden');
+        alertEl.textContent = (t.import_missing_required || 'Required fields missing: ') + data.missing_required.join(', ');
+        document.getElementById('btnProceedImport').disabled = true;
+    } else {
+        alertEl.classList.add('hidden');
+        document.getElementById('btnProceedImport').disabled = false;
+    }
+
+    // Column list
+    var listEl = document.getElementById('previewColList');
+    listEl.innerHTML = '';
+    data.columns.forEach(function(col, i) {
+        var row = document.createElement('div');
+        row.className = 'import-col-row';
+
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.id = 'prevcol_' + i;
+        cb.checked = col.status !== 'unmapped';
+        cb.disabled = col.status === 'required' || col.status === 'unmapped';
+        cb.dataset.colIndex = i;
+        row.appendChild(cb);
+
+        var label = document.createElement('label');
+        label.htmlFor = cb.id;
+        label.className = 'import-col-name';
+        label.textContent = col.header;
+        row.appendChild(label);
+
+        if (col.field) {
+            var fieldBadge = document.createElement('span');
+            fieldBadge.className = 'import-col-fieldname';
+            fieldBadge.textContent = col.field;
+            row.appendChild(fieldBadge);
+        }
+
+        var badge = document.createElement('span');
+        badge.className = 'import-col-badge badge-' + col.status;
+        if (col.status === 'required') badge.textContent = t.import_col_required || 'Required';
+        else if (col.status === 'mapped') badge.textContent = t.import_col_mapped || 'Mapped';
+        else badge.textContent = t.import_col_unmapped || 'Not recognised';
+        row.appendChild(badge);
+
+        listEl.appendChild(row);
+    });
+
+    // Sample table
+    var sampleCount = document.getElementById('previewSampleCount');
+    sampleCount.textContent = '(' + data.sample_rows.length + ' ' + (t.import_sample_rows || 'rows') + ')';
+
+    var tbl = document.getElementById('previewSampleTable');
+    tbl.innerHTML = '';
+
+    var thead = document.createElement('thead');
+    var hrow = document.createElement('tr');
+    data.columns.forEach(function(col) {
+        var th = document.createElement('th');
+        th.textContent = col.header;
+        if (col.status === 'unmapped') th.className = 'col-unmapped';
+        hrow.appendChild(th);
+    });
+    thead.appendChild(hrow);
+    tbl.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    data.sample_rows.forEach(function(row) {
+        var tr = document.createElement('tr');
+        row.forEach(function(val, i) {
+            var td = document.createElement('td');
+            td.textContent = val;
+            if (data.columns[i] && data.columns[i].status === 'unmapped') td.className = 'col-unmapped';
+            tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+    });
+    tbl.appendChild(tbody);
+}
+
+async function confirmImport() {
+    if (!_uploadSessionId) return;
+
+    var refreshAll = document.getElementById('refreshAll');
+    var isRefreshAll = refreshAll && refreshAll.checked;
+
+    if (isRefreshAll) {
+        var warningMsg = T().import_refresh_warning ||
+            'This will delete the entire existing organization structure. Continue?';
+        if (!confirm(warningMsg)) return;
+    }
+
+    var selected = _previewColumns
+        .filter(function(col, i) {
+            if (col.status === 'unmapped') return false;
+            var cb = document.getElementById('prevcol_' + i);
+            return cb ? cb.checked : false;
+        })
+        .map(function(col) { return col.header; });
+
+    closeImportPreview();
+
+    var progressDiv = document.getElementById('uploadProgress');
+    var resultDiv = document.getElementById('uploadResult');
+    var progressFill = document.getElementById('progressFill');
+    var progressText = document.getElementById('progressText');
     progressDiv.style.display = 'block';
     resultDiv.style.display = 'none';
     progressFill.style.width = '30%';
-    progressText.textContent = T().import_uploading || 'Uploading file...';
-
-    const formData = new FormData();
-    formData.append('file', file);
+    progressText.textContent = T().import_importing || 'Importing...';
 
     try {
-        progressFill.style.width = '60%';
-        progressText.textContent = T().import_importing || 'Importing...';
-
-        const resp = await fetch('/api/import-org', { method: 'POST', body: formData });
-        const data = await resp.json();
-
+        progressFill.style.width = '70%';
+        var resp = await fetch('/api/import-org', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                session_id: _uploadSessionId,
+                selected_columns: selected,
+                refresh_all: isRefreshAll,
+            }),
+        });
+        var data = await resp.json();
         progressFill.style.width = '100%';
 
         if (data.success) {
             progressText.textContent = T().import_done || 'Done!';
             resultDiv.style.display = 'block';
             resultDiv.className = 'upload-result alert alert-success';
-            resultDiv.textContent = (T().import_success || 'Imported {n} employees into the database.').replace('{n}', data.imported);
+            var msg = (T().import_success || 'Imported {n} employees.').replace('{n}', data.imported);
+            if (data.preserved_mappings > 0) {
+                msg += ' ' + (T().import_preserved || '{n} GitHub mappings preserved.').replace('{n}', data.preserved_mappings);
+            }
+            resultDiv.textContent = msg;
             updateStats(data.stats);
+            _pendingOrgFile = null;
+            _uploadSessionId = null;
+            document.getElementById('importActions').style.display = 'none';
         } else {
             progressText.textContent = T().import_error || 'Error';
             resultDiv.style.display = 'block';
@@ -330,7 +513,7 @@ async function uploadOrgFile(file) {
         progressText.textContent = T().import_error || 'Error';
         resultDiv.style.display = 'block';
         resultDiv.className = 'upload-result alert alert-error';
-        resultDiv.textContent = `${T().error_prefix || 'Error'}: ${e.message}`;
+        resultDiv.textContent = e.message;
     }
 }
 
@@ -476,11 +659,15 @@ async function loadUnmatched() {
             listDiv.innerHTML = `
                 <p style="color:var(--text-secondary);font-size:13px;margin:12px 0 8px;">
                     ${(T().map_unmatched_count || '{n} unmatched users:').replace('{n}', data.count)}
+                    <button class="btn" style="margin-left:12px;padding:4px 12px;font-size:12px;" onclick="downloadUnmatched()">
+                        ${T().map_unmatched_download || 'Download list'}
+                    </button>
                 </p>
                 <div class="unmatched-grid">
                     ${data.unmatched.map(u => `<span class="unmatched-tag">${u}</span>`).join('')}
                 </div>
             `;
+            window._unmatchedUsers = data.unmatched;
         }
     } catch (e) {
         listDiv.style.display = 'block';
@@ -508,7 +695,7 @@ function updateStats(stats) {
 // ── Chart Help Toggle ────────────────────────────────────────
 
 function toggleChartHelp(btn) {
-    var card = btn.closest('.chart-card');
+    var card = btn.closest('.chart-card, .productivity-chart-card');
     var helpDiv = card.querySelector('.chart-help-text');
     if (helpDiv.style.display === 'none' || !helpDiv.style.display) {
         helpDiv.style.display = 'block';
@@ -519,6 +706,47 @@ function toggleChartHelp(btn) {
     }
 }
 
+// ── Productivity Chart Helpers ───────────────────────────────
+
+function _buildThresholdShapes(thresholds, seriesLength) {
+    var lineColors = ['#f85149', '#d29922', '#58a6ff'];
+    return thresholds.map(function(t, i) {
+        return {
+            type: 'line', y0: t, y1: t,
+            x0: -0.5, x1: seriesLength - 0.5,
+            xref: 'x', yref: 'y',
+            line: { color: lineColors[i], width: 1, dash: 'dot' },
+        };
+    });
+}
+
+function _renderProductivityLegend(containerId, thresholds) {
+    var el = document.getElementById(containerId);
+    if (!el) return;
+    var t = T();
+    var labels = [
+        t.product_scale_cautious    || 'Cautious / Legacy',
+        t.product_scale_standard    || 'Standard Adopters',
+        t.product_scale_advanced    || 'Advanced',
+        t.product_scale_agent_first || 'Agent-First / Power Users',
+    ];
+    var dotColors = ['#f85149', '#d29922', '#3fb950', '#58a6ff'];
+    var fmt = function(v) { return v % 1 === 0 ? String(v) : v.toFixed(1); };
+    var th = thresholds;
+    var bands = [
+        '< ' + fmt(th[0]),
+        fmt(th[0]) + '\u2013' + fmt(th[1]),
+        fmt(th[1]) + '\u2013' + fmt(th[2]),
+        '> ' + fmt(th[2]),
+    ];
+    el.innerHTML = labels.map(function(lbl, i) {
+        return '<div class="productivity-scale-item">'
+            + '<span class="agent-dot" style="background:' + dotColors[i] + '"></span>'
+            + '<span>' + bands[i] + ' \u2014 ' + lbl + '</span>'
+            + '</div>';
+    }).join('');
+}
+
 // ── Dashboard Charts (Plotly) ────────────────────────────────
 
 function initDashboardCharts() {
@@ -527,8 +755,9 @@ function initDashboardCharts() {
     const topUsersEl = document.getElementById('topUsersChart');
     const sugAccEl = document.getElementById('suggestedAcceptedChart');
     const usageTrendEl = document.getElementById('usageTrendChart');
-    const agentWowEl = document.getElementById('agentEditsWowChart');
-    if (!adoptionEl && !featureEl && !topUsersEl && !sugAccEl && !usageTrendEl && !agentWowEl) return;
+    const productivityTrendEl = document.getElementById('productivityTrendChart');
+    const productivityTrendSeatsEl = document.getElementById('productivityTrendSeatsChart');
+    if (!adoptionEl && !featureEl && !topUsersEl && !sugAccEl && !usageTrendEl && !productivityTrendEl && !productivityTrendSeatsEl) return;
 
     const darkLayout = {
         paper_bgcolor: 'transparent',
@@ -540,8 +769,10 @@ function initDashboardCharts() {
         legend: { orientation: 'h', y: -0.2 },
     };
 
+    var qs = (typeof filterQueryString === 'function') ? filterQueryString() : '';
+
     if (adoptionEl) {
-        fetch('/api/charts/adoption')
+        fetch('/api/charts/adoption' + qs)
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.error) {
@@ -575,7 +806,7 @@ function initDashboardCharts() {
     }
 
     if (featureEl) {
-        fetch('/api/charts/features')
+        fetch('/api/charts/features' + qs)
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.error) {
@@ -595,7 +826,7 @@ function initDashboardCharts() {
                     marker: { colors: colors.slice(0, data.labels.length) },
                     textinfo: 'percent',
                     textfont: { color: '#c9d1d9', size: 11 },
-                    hovertemplate: '%{label}<br>%{value:,}<br>%{percent}<extra></extra>',
+                    hovertemplate: '%{label}<br>%{value:,} users<br>%{percent}<extra></extra>',
                     sort: false,
                 }];
                 featureEl.textContent = '';
@@ -612,7 +843,7 @@ function initDashboardCharts() {
 
     // ── Top 10 Active Users (horizontal bar) ──
     if (topUsersEl) {
-        fetch('/api/charts/top-users')
+        fetch('/api/charts/top-users' + qs)
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.error) { topUsersEl.textContent = data.error; return; }
@@ -644,7 +875,7 @@ function initDashboardCharts() {
 
     // ── Suggested vs Accepted Code (14 days) ──
     if (sugAccEl) {
-        fetch('/api/charts/suggested-accepted')
+        fetch('/api/charts/suggested-accepted' + qs)
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.error) { sugAccEl.textContent = data.error; return; }
@@ -684,7 +915,7 @@ function initDashboardCharts() {
 
     // ── 28-Day Usage Trend (composite score) ──
     if (usageTrendEl) {
-        fetch('/api/charts/usage-trend')
+        fetch('/api/charts/usage-trend' + qs)
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.error) { usageTrendEl.textContent = data.error; return; }
@@ -713,34 +944,16 @@ function initDashboardCharts() {
             .catch(function(e) { usageTrendEl.textContent = 'Error: ' + e.message; });
     }
 
-    // ── Agent Edits / User — Week over Week (bar chart) ──
-    if (agentWowEl) {
-        fetch('/api/charts/agent-edits-wow')
+    // ── Weekly Productivity Trend (Agent Edits / User) ──
+    if (productivityTrendEl) {
+        fetch('/api/charts/productivity-trend' + qs)
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                if (data.error) { agentWowEl.textContent = data.error; return; }
+                if (data.error) { productivityTrendEl.textContent = data.error; return; }
                 if (!data.labels || data.labels.length === 0) {
-                    agentWowEl.textContent = 'No data available';
+                    productivityTrendEl.textContent = 'No data available';
                     return;
                 }
-                // Reference bands
-                // Weekly thresholds = monthly / 4
-                var shapes = [
-                    { type: 'line', y0: 2.5, y1: 2.5, x0: -0.5, x1: data.labels.length - 0.5,
-                      xref: 'x', yref: 'y', line: { color: '#f85149', width: 1, dash: 'dot' } },
-                    { type: 'line', y0: 12.5, y1: 12.5, x0: -0.5, x1: data.labels.length - 0.5,
-                      xref: 'x', yref: 'y', line: { color: '#d29922', width: 1, dash: 'dot' } },
-                    { type: 'line', y0: 25, y1: 25, x0: -0.5, x1: data.labels.length - 0.5,
-                      xref: 'x', yref: 'y', line: { color: '#58a6ff', width: 1, dash: 'dot' } },
-                ];
-                var annotations = [
-                    { x: data.labels.length - 0.6, y: 2.5, xref: 'x', yref: 'y', text: 'Cautious',
-                      showarrow: false, font: { size: 9, color: '#f85149' }, xanchor: 'right' },
-                    { x: data.labels.length - 0.6, y: 12.5, xref: 'x', yref: 'y', text: 'Standard',
-                      showarrow: false, font: { size: 9, color: '#d29922' }, xanchor: 'right' },
-                    { x: data.labels.length - 0.6, y: 25, xref: 'x', yref: 'y', text: 'Agent-First',
-                      showarrow: false, font: { size: 9, color: '#58a6ff' }, xanchor: 'right' },
-                ];
                 var traces = [{
                     x: data.labels,
                     y: data.values,
@@ -751,8 +964,29 @@ function initDashboardCharts() {
                     textfont: { color: '#c9d1d9', size: 11 },
                     hovertemplate: '%{x}<br>%{y:.1f} edits/user<extra></extra>',
                 }];
-                agentWowEl.textContent = '';
-                Plotly.newPlot(agentWowEl, traces,
+                var thresholds = data.thresholds || [0.36, 1.79, 3.57];
+                var shapes = _buildThresholdShapes(thresholds, data.labels.length);
+                var annotations = [];
+                if (data.average != null) {
+                    shapes.push({
+                        type: 'line', y0: data.average, y1: data.average,
+                        x0: -0.5, x1: data.labels.length - 0.5,
+                        xref: 'x', yref: 'y',
+                        line: { color: '#bc8cff', width: 1.5, dash: 'dashdot' },
+                    });
+                    annotations.push({
+                        x: data.labels.length - 0.5, y: data.average,
+                        xref: 'x', yref: 'y',
+                        text: (T().product_weekly_average || '13w avg') + ': ' + data.average.toFixed(1),
+                        showarrow: false,
+                        xanchor: 'right',
+                        font: { color: '#bc8cff', size: 11 },
+                        bgcolor: 'rgba(13,17,23,0.7)',
+                        borderpad: 3,
+                    });
+                }
+                productivityTrendEl.textContent = '';
+                Plotly.newPlot(productivityTrendEl, traces,
                     Object.assign({}, darkLayout, {
                         shapes: shapes,
                         annotations: annotations,
@@ -761,8 +995,67 @@ function initDashboardCharts() {
                         margin: { t: 20, r: 20, b: 60, l: 50 },
                     }),
                     { responsive: true, displayModeBar: false });
+                _renderProductivityLegend('productivityTrendLegend', thresholds);
             })
-            .catch(function(e) { agentWowEl.textContent = 'Error: ' + e.message; });
+            .catch(function(e) { productivityTrendEl.textContent = 'Error: ' + e.message; });
+    }
+
+    // ── Weekly Productivity Trend (Agent Edits / Total Seats) ──
+    if (productivityTrendSeatsEl) {
+        fetch('/api/charts/productivity-trend-seats' + qs)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.error) { productivityTrendSeatsEl.textContent = data.error; return; }
+                if (!data.labels || data.labels.length === 0) {
+                    productivityTrendSeatsEl.textContent = 'No data available';
+                    return;
+                }
+                var traces = [{
+                    x: data.labels,
+                    y: data.values,
+                    type: 'bar',
+                    marker: { color: data.colors },
+                    text: data.values.map(function(v) { return v.toFixed(1); }),
+                    textposition: 'outside',
+                    textfont: { color: '#c9d1d9', size: 11 },
+                    hovertemplate: data.total_seats
+                        ? '%{x}<br>%{y:.1f} edits/seat (' + data.total_seats + ' seats)<extra></extra>'
+                        : '%{x}<br>%{y:.1f} edits/seat<extra></extra>',
+                }];
+                var thresholds = data.thresholds || [0.36, 1.79, 3.57];
+                var shapes = _buildThresholdShapes(thresholds, data.labels.length);
+                var annotations = [];
+                if (data.average != null) {
+                    shapes.push({
+                        type: 'line', y0: data.average, y1: data.average,
+                        x0: -0.5, x1: data.labels.length - 0.5,
+                        xref: 'x', yref: 'y',
+                        line: { color: '#bc8cff', width: 1.5, dash: 'dashdot' },
+                    });
+                    annotations.push({
+                        x: data.labels.length - 0.5, y: data.average,
+                        xref: 'x', yref: 'y',
+                        text: (T().product_weekly_average || '13w avg') + ': ' + data.average.toFixed(1),
+                        showarrow: false,
+                        xanchor: 'right',
+                        font: { color: '#bc8cff', size: 11 },
+                        bgcolor: 'rgba(13,17,23,0.7)',
+                        borderpad: 3,
+                    });
+                }
+                productivityTrendSeatsEl.textContent = '';
+                Plotly.newPlot(productivityTrendSeatsEl, traces,
+                    Object.assign({}, darkLayout, {
+                        shapes: shapes,
+                        annotations: annotations,
+                        xaxis: { type: 'category', gridcolor: '#30363d' },
+                        yaxis: { gridcolor: '#30363d', title: 'Edits / Seat' },
+                        margin: { t: 20, r: 20, b: 60, l: 50 },
+                    }),
+                    { responsive: true, displayModeBar: false });
+                _renderProductivityLegend('productivityTrendSeatsLegend', thresholds);
+            })
+            .catch(function(e) { productivityTrendSeatsEl.textContent = 'Error: ' + e.message; });
     }
 }
 
@@ -820,7 +1113,8 @@ function initROI() {
     });
 
     // Fetch data
-    fetch('/api/roi-data')
+    var qs = (typeof filterQueryString === 'function') ? filterQueryString() : '';
+    fetch('/api/roi-data' + qs)
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data.error) return;
@@ -829,11 +1123,183 @@ function initROI() {
         });
 }
 
+// ── Org Filters ─────────────────────────────────────────────
+
+var _orgFilterData = null; // cached from /api/org-filters
+var _activeFilter = { level: null, value: null };
+
+function initOrgFilters() {
+    var bar = document.getElementById('orgFilterBar');
+    if (!bar) return;
+
+    var sel4 = document.getElementById('filterLevel4');
+    var sel5 = document.getElementById('filterLevel5');
+    var sel6 = document.getElementById('filterLevel6');
+    var sel7 = document.getElementById('filterLevel7');
+    var sel8 = document.getElementById('filterLevel8');
+    var resetBtn = document.getElementById('filterReset');
+
+    function resetFrom(level) {
+        // Reset all selects from the given level downward
+        var chain = [
+            { sel: sel5, placeholder: '— Level 5 —' },
+            { sel: sel6, placeholder: '— Level 6 —' },
+            { sel: sel7, placeholder: '— Level 7 —' },
+            { sel: sel8, placeholder: '— Level 8 —' }
+        ];
+        var startIdx = { '5': 0, '6': 1, '7': 2, '8': 3 }[level];
+        if (startIdx === undefined) return;
+        for (var i = startIdx; i < chain.length; i++) {
+            chain[i].sel.innerHTML = '<option value="">' + chain[i].placeholder + '</option>';
+            chain[i].sel.disabled = true;
+        }
+    }
+
+    function populateChildren(parentLevel, parentValue, childSel) {
+        var kids = ((_orgFilterData.children[parentLevel] || {})[parentValue]) || [];
+        if (kids.length > 0) {
+            childSel.disabled = false;
+            kids.forEach(function(v) {
+                var opt = document.createElement('option');
+                opt.value = v; opt.textContent = v;
+                childSel.appendChild(opt);
+            });
+        }
+    }
+
+    fetch('/api/org-filters')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data.enabled) { bar.style.display = 'none'; return; }
+            _orgFilterData = data;
+
+            // Populate level 4 (top-level)
+            data.levels['4'].forEach(function(v) {
+                var opt = document.createElement('option');
+                opt.value = v; opt.textContent = v;
+                sel4.appendChild(opt);
+            });
+        });
+
+    sel4.addEventListener('change', function() {
+        resetFrom('5');
+        if (!this.value) {
+            _activeFilter = { level: null, value: null };
+            resetBtn.style.display = 'none';
+            refreshDashboard();
+            return;
+        }
+        _activeFilter = { level: '4', value: this.value };
+        resetBtn.style.display = '';
+        populateChildren('4', this.value, sel5);
+        refreshDashboard();
+    });
+
+    sel5.addEventListener('change', function() {
+        resetFrom('6');
+        if (!this.value) {
+            _activeFilter = { level: '4', value: sel4.value };
+            refreshDashboard();
+            return;
+        }
+        _activeFilter = { level: '5', value: this.value };
+        populateChildren('5', this.value, sel6);
+        refreshDashboard();
+    });
+
+    sel6.addEventListener('change', function() {
+        resetFrom('7');
+        if (!this.value) {
+            _activeFilter = { level: '5', value: sel5.value };
+            refreshDashboard();
+            return;
+        }
+        _activeFilter = { level: '6', value: this.value };
+        populateChildren('6', this.value, sel7);
+        refreshDashboard();
+    });
+
+    sel7.addEventListener('change', function() {
+        resetFrom('8');
+        if (!this.value) {
+            _activeFilter = { level: '6', value: sel6.value };
+            refreshDashboard();
+            return;
+        }
+        _activeFilter = { level: '7', value: this.value };
+        populateChildren('7', this.value, sel8);
+        refreshDashboard();
+    });
+
+    sel8.addEventListener('change', function() {
+        if (!this.value) {
+            _activeFilter = { level: '7', value: sel7.value };
+        } else {
+            _activeFilter = { level: '8', value: this.value };
+        }
+        refreshDashboard();
+    });
+
+    resetBtn.addEventListener('click', function() {
+        sel4.value = '';
+        resetFrom('5');
+        _activeFilter = { level: null, value: null };
+        resetBtn.style.display = 'none';
+        refreshDashboard();
+    });
+}
+
+function filterQueryString() {
+    if (!_activeFilter.level || !_activeFilter.value) return '';
+    return '?filter_level=' + encodeURIComponent(_activeFilter.level) +
+           '&filter_value=' + encodeURIComponent(_activeFilter.value);
+}
+
+function refreshDashboard() {
+    var qs = filterQueryString();
+
+    // Refresh KPIs via HTMX
+    var kpiEl = document.getElementById('kpiCards');
+    if (kpiEl) {
+        kpiEl.innerHTML = '<div class="kpi-card"><div class="kpi-value">…</div><div class="kpi-label">Loading</div></div>';
+        fetch('/api/metrics' + qs).then(function(r) { return r.text(); }).then(function(html) {
+            kpiEl.innerHTML = html;
+        });
+    }
+
+    // Refresh HTMX widgets
+    var adoptionEl = document.getElementById('adoptionWidget');
+    if (adoptionEl) {
+        fetch('/api/adoption-kpis' + qs).then(function(r) { return r.text(); }).then(function(html) {
+            adoptionEl.innerHTML = html;
+        });
+    }
+    var productivityEl = document.getElementById('productivityCards');
+    if (productivityEl) {
+        productivityEl.innerHTML = '<div class="productivity-card"><div class="productivity-value">…</div><div class="productivity-label">Loading</div></div>';
+        fetch('/api/productivity-insights' + qs).then(function(r) { return r.text(); }).then(function(html) {
+            productivityEl.innerHTML = html;
+        });
+    }
+    var insightsEl = document.getElementById('quickInsights');
+    if (insightsEl) {
+        fetch('/api/insights' + qs).then(function(r) { return r.text(); }).then(function(html) {
+            insightsEl.innerHTML = html;
+        });
+    }
+
+    // Refresh all charts
+    initDashboardCharts();
+    // Refresh ROI
+    initROI();
+}
+
 // ── Initialize ──────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', function() {
     initChat();
     initSetup();
+    initOrgFilters();
     initDashboardCharts();
     initROI();
 });

@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="settings-page">
+    <div class="dashboard-header">
+        <h1>{{ t.settings_title }}</h1>
+        <p class="subtitle">{{ t.settings_subtitle }}</p>
+    </div>
+
+    <!-- Current provider status -->
+    <div class="settings-status-bar">
+        <span class="settings-status-label">{{ t.settings_current }}:</span>
+        <span class="settings-provider-badge {% if current_provider == 'anthropic' %}badge-anthropic{% else %}badge-copilot{% endif %}">
+            {% if current_provider == 'anthropic' %}
+                ◆ Anthropic — {{ current_model or t.settings_default_model }}
+            {% else %}
+                ◈ GitHub Copilot — {{ current_model or t.settings_default_model }}
+            {% endif %}
+        </span>
+    </div>
+
+    <div class="settings-card">
+        <form id="settingsForm" autocomplete="off">
+
+            <!-- Provider selector -->
+            <div class="settings-field">
+                <label class="settings-label">{{ t.settings_provider_label }}</label>
+                <div class="settings-provider-toggle">
+                    <label class="provider-option">
+                        <input type="radio" name="llm_provider" value="anthropic"
+                               {% if current_provider == 'anthropic' %}checked{% endif %}
+                               onchange="onProviderChange(this.value)">
+                        <span class="provider-option-label">
+                            <span class="provider-icon">◆</span>
+                            {{ t.settings_anthropic }}
+                        </span>
+                    </label>
+                    <label class="provider-option">
+                        <input type="radio" name="llm_provider" value="github-copilot"
+                               {% if current_provider == 'github-copilot' %}checked{% endif %}
+                               onchange="onProviderChange(this.value)">
+                        <span class="provider-option-label">
+                            <span class="provider-icon">◈</span>
+                            {{ t.settings_github_copilot }}
+                        </span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Anthropic-specific fields -->
+            <div id="fieldsAnthropic" class="settings-provider-fields {% if current_provider != 'anthropic' %}hidden{% endif %}">
+                <div class="settings-field">
+                    <label class="settings-label" for="anthropicApiKey">{{ t.settings_api_key }}</label>
+                    <input type="password" id="anthropicApiKey" name="anthropic_api_key"
+                           class="settings-input"
+                           placeholder="sk-ant-…"
+                           value="{{ anthropic_key_masked }}">
+                    <p class="settings-hint">{{ t.settings_api_key_hint }}</p>
+                </div>
+                <div class="settings-field">
+                    <p class="settings-hint settings-model-list">{{ t.settings_anthropic_models }}</p>
+                </div>
+            </div>
+
+            <!-- GitHub Copilot-specific fields -->
+            <div id="fieldsCopilot" class="settings-provider-fields {% if current_provider != 'github-copilot' %}hidden{% endif %}">
+                <div class="settings-field">
+                    <div class="settings-notice">
+                        ℹ {{ t.settings_github_token_note }}
+                    </div>
+                </div>
+                <div class="settings-field">
+                    <label class="settings-label" for="llmGithubToken">{{ t.settings_llm_github_token }}</label>
+                    <input type="password" id="llmGithubToken" name="llm_github_token"
+                           class="settings-input"
+                           placeholder="ghp_…"
+                           value="{{ llm_github_token_masked }}">
+                    <p class="settings-hint">{{ t.settings_llm_github_token_hint }}</p>
+                </div>
+                <div class="settings-field">
+                    <p class="settings-hint settings-model-list">{{ t.settings_copilot_models }}</p>
+                </div>
+            </div>
+
+            <!-- Shared fields -->
+            <div class="settings-field">
+                <label class="settings-label" for="llmModel">{{ t.settings_model }}</label>
+                <input type="text" id="llmModel" name="llm_model"
+                       class="settings-input"
+                       placeholder="{{ t.settings_default_model }}"
+                       value="{{ current_model }}">
+                <p class="settings-hint">{{ t.settings_model_hint }}</p>
+            </div>
+
+            <div id="fieldEndpoint" class="settings-field {% if current_provider != 'github-copilot' %}hidden{% endif %}">
+                <label class="settings-label" for="llmEndpoint">{{ t.settings_endpoint }}</label>
+                <input type="text" id="llmEndpoint" name="llm_endpoint"
+                       class="settings-input"
+                       placeholder="https://models.inference.ai.azure.com/chat/completions"
+                       value="{{ current_endpoint }}">
+                <p class="settings-hint">{{ t.settings_endpoint_hint }}</p>
+            </div>
+
+            <!-- Actions -->
+            <div class="settings-actions">
+                <button type="submit" class="btn btn-primary">{{ t.settings_save }}</button>
+                <span id="settingsFeedback" class="settings-feedback"></span>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function onProviderChange(provider) {
+    document.getElementById('fieldsAnthropic').classList.toggle('hidden', provider !== 'anthropic');
+    document.getElementById('fieldsCopilot').classList.toggle('hidden', provider !== 'github-copilot');
+    document.getElementById('fieldEndpoint').classList.toggle('hidden', provider !== 'github-copilot');
+}
+
+document.getElementById('settingsForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var fb = document.getElementById('settingsFeedback');
+    fb.textContent = '';
+    fb.className = 'settings-feedback';
+
+    var data = {
+        llm_provider: document.querySelector('input[name="llm_provider"]:checked').value,
+        anthropic_api_key: document.getElementById('anthropicApiKey').value,
+        llm_github_token: document.getElementById('llmGithubToken').value,
+        llm_model: document.getElementById('llmModel').value.trim(),
+        llm_endpoint: document.getElementById('llmEndpoint').value.trim(),
+    };
+
+    fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(resp) {
+        if (resp.ok) {
+            fb.textContent = '{{ t.settings_saved }}';
+            fb.className = 'settings-feedback feedback-ok';
+            // Reload page to update the status bar
+            setTimeout(function() { window.location.reload(); }, 1200);
+        } else {
+            fb.textContent = '{{ t.settings_error }}' + (resp.error || 'Unknown error');
+            fb.className = 'settings-feedback feedback-error';
+        }
+    })
+    .catch(function(err) {
+        fb.textContent = '{{ t.settings_error }}' + err.message;
+        fb.className = 'settings-feedback feedback-error';
+    });
+});
+</script>
+{% endblock %}
