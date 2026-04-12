@@ -7,6 +7,51 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "nav_dashboard": {"en": "Dashboard", "it": "Dashboard"},
     "nav_chat": {"en": "Chat", "it": "Chat"},
     "nav_setup": {"en": "Setup", "it": "Setup"},
+    "nav_settings": {"en": "Settings", "it": "Impostazioni"},
+
+    # ── Settings page ────────────────────────────────────────
+    "settings_title": {"en": "LLM Settings", "it": "Impostazioni LLM"},
+    "settings_subtitle": {
+        "en": "Configure the AI provider used by the chat assistant.",
+        "it": "Configura il provider AI utilizzato dall'assistente chat.",
+    },
+    "settings_provider_label": {"en": "AI Provider", "it": "Provider AI"},
+    "settings_anthropic": {"en": "Anthropic (Claude)", "it": "Anthropic (Claude)"},
+    "settings_github_copilot": {"en": "GitHub Copilot", "it": "GitHub Copilot"},
+    "settings_api_key": {"en": "Anthropic API Key", "it": "Chiave API Anthropic"},
+    "settings_api_key_hint": {
+        "en": "Leave blank to keep the current key.",
+        "it": "Lascia vuoto per mantenere la chiave attuale.",
+    },
+    "settings_github_token_note": {
+        "en": "The GitHub Copilot LLM provider requires a Personal Access Token (PAT) with Copilot access. This token is used only for AI chat calls — it does not affect GitHub API authentication (which uses your existing GitHub App or GITHUB_TOKEN configuration).",
+        "it": "Il provider LLM GitHub Copilot richiede un Personal Access Token (PAT) con accesso Copilot. Questo token viene usato solo per le chiamate AI chat — non influisce sull'autenticazione alle API GitHub (che usa la configurazione GitHub App o GITHUB_TOKEN esistente).",
+    },
+    "settings_llm_github_token": {
+        "en": "GitHub Token (for Copilot LLM only)",
+        "it": "GitHub Token (solo per LLM Copilot)",
+    },
+    "settings_llm_github_token_hint": {
+        "en": "A PAT with 'copilot' scope. Leave blank to keep the current token. This does NOT change how the dashboard authenticates to GitHub APIs.",
+        "it": "Un PAT con scope 'copilot'. Lascia vuoto per mantenere il token attuale. Questo NON modifica l'autenticazione alle API GitHub del dashboard.",
+    },
+    "settings_model": {"en": "Model override", "it": "Modello personalizzato"},
+    "settings_model_hint": {
+        "en": "Leave blank to use the provider default.",
+        "it": "Lascia vuoto per usare il modello predefinito del provider.",
+    },
+    "settings_endpoint": {"en": "Custom endpoint URL", "it": "URL endpoint personalizzato"},
+    "settings_endpoint_hint": {
+        "en": "Leave blank for the default (models.inference.ai.azure.com). Change only if your org uses a custom gateway.",
+        "it": "Lascia vuoto per il default (models.inference.ai.azure.com). Modifica solo se la tua org usa un gateway personalizzato.",
+    },
+    "settings_save": {"en": "Save Settings", "it": "Salva impostazioni"},
+    "settings_saved": {"en": "\u2713 Settings saved and provider updated.", "it": "\u2713 Impostazioni salvate e provider aggiornato."},
+    "settings_error": {"en": "Error: ", "it": "Errore: "},
+    "settings_current": {"en": "Active provider", "it": "Provider attivo"},
+    "settings_default_model": {"en": "default", "it": "default"},
+    "settings_anthropic_models": {"en": "Anthropic models: claude-sonnet-4-20250514, claude-opus-4-5, claude-haiku-4-5-20251001", "it": "Modelli Anthropic: claude-sonnet-4-20250514, claude-opus-4-5, claude-haiku-4-5-20251001"},
+    "settings_copilot_models": {"en": "GitHub Copilot models: gpt-4o, gpt-4o-mini, o1, o3-mini", "it": "Modelli GitHub Copilot: gpt-4o, gpt-4o-mini, o1, o3-mini"},
 
     # ── Dashboard ────────────────────────────────────────────
     "dash_title": {"en": "Copilot Usage Dashboard", "it": "Copilot Usage Dashboard"},
@@ -15,7 +60,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "dash_acceptance_rate": {"en": "Acceptance Rate", "it": "Acceptance Rate"},
     "dash_active_seats": {"en": "Active Seats", "it": "Seat attivi"},
     "dash_adoption_trend": {"en": "Adoption Trend (28 days)", "it": "Trend di adozione (28 giorni)"},
-    "dash_feature_usage": {"en": "Feature Usage Distribution", "it": "Distribuzione utilizzo funzionalita'"},
+    "dash_feature_usage": {"en": "Feature Adoption (Unique Users)", "it": "Adozione funzionalita' (utenti unici)"},
     "dash_loading": {"en": "Loading...", "it": "Caricamento..."},
     "dash_suggested": {"en": "Suggested", "it": "Suggerito"},
     "dash_accepted": {"en": "Accepted", "it": "Accettato"},
@@ -24,8 +69,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "it": "Utenti attivi: utenti che hanno avuto almeno un'interazione con Copilot (completamento, chat, CLI) in quel giorno.\n\nUtenti coinvolti: utenti che hanno usato Copilot almeno una volta nella finestra mobile di 28 giorni che termina in quel giorno.\n\nLe metriche hanno un ritardo di ~2 giorni lavorativi rispetto all'attivita' reale. La telemetria deve essere abilitata nell'IDE.",
     },
     "dash_help_features": {
-        "en": "Activity counts over the last 28 days by feature:\n\nCode Completions: inline ghost-text suggestions (code_generation_activity_count).\n\nAgent Mode: agentic multi-file coding sessions in the IDE.\nAgent Edits: autonomous file changes performed by Agent.\n\nChat — Ask / Custom / Edit / Plan / Other: chat panel interactions by mode.\nInline Chat: Cmd+I / Ctrl+I quick edits in the editor.\n\nPull Requests: PRs created with Copilot assistance.\nCLI Sessions: gh copilot terminal sessions.",
-        "it": "Conteggio attivita' negli ultimi 28 giorni per funzionalita':\n\nCode Completions: suggerimenti ghost-text inline (code_generation_activity_count).\n\nAgent Mode: sessioni di coding agentiche multi-file nell'IDE.\nAgent Edits: modifiche file autonome eseguite dall'Agent.\n\nChat — Ask / Custom / Edit / Plan / Other: interazioni nel pannello chat per modalita'.\nInline Chat: modifiche rapide con Cmd+I / Ctrl+I nell'editor.\n\nPull Requests: PR create con assistenza Copilot.\nCLI Sessions: sessioni terminale gh copilot.",
+        "en": "Unique users who used each feature at least once in the last 28 days.\n\nCode Completions: inline ghost-text suggestions.\nAgent Mode: agentic multi-file coding sessions in the IDE.\nAgent Edits: autonomous file changes performed by Agent.\n\nChat — Ask / Custom / Edit / Plan / Other: chat panel interactions by mode.\nInline Chat: Cmd+I / Ctrl+I quick edits in the editor.\nCLI Sessions: gh copilot terminal sessions.\n\nUsing unique-user counts makes all features directly comparable regardless of how many interactions each generates.",
+        "it": "Utenti unici che hanno usato ogni funzionalita' almeno una volta negli ultimi 28 giorni.\n\nCode Completions: suggerimenti ghost-text inline.\nAgent Mode: sessioni di coding agentiche multi-file nell'IDE.\nAgent Edits: modifiche file autonome eseguite dall'Agent.\n\nChat — Ask / Custom / Edit / Plan / Other: interazioni nel pannello chat per modalita'.\nInline Chat: modifiche rapide con Cmd+I / Ctrl+I nell'editor.\nCLI Sessions: sessioni terminale gh copilot.\n\nUsare utenti unici rende tutte le funzionalita' direttamente confrontabili.",
     },
     "dash_top_users": {"en": "Top 10 Active Users (28 days)", "it": "Top 10 utenti attivi (28 giorni)"},
     "dash_suggested_vs_accepted": {"en": "Suggested vs Accepted Code (14 days)", "it": "Codice suggerito vs accettato (14 giorni)"},
@@ -63,6 +108,46 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "it": "Trend settimanale delle modifiche autonome per utente attivo (agent_edit / monthly_active_users), campionato ogni mercoledi' per le ultime 13 settimane.\n\nBande di riferimento:\n< 10 (rosso): Cautious / Legacy — uso minimo dell'agent, ROI basso.\n10–50 (giallo): Standard Adopters — integrazione sana, l'IA scrive parti di logica.\n50–100 (verde): Advanced — sviluppo significativo guidato dall'agent.\n> 100 (blu): Agent-First / Power Users — uso massivo dell'agent, ROI altissimo.",
     },
     "dash_adoption_title": {"en": "CLI & Agent Adoption", "it": "Adozione CLI & Agent"},
+    "dash_productivity_title": {"en": "Productivity Insights", "it": "Productivity Insights"},
+    "dash_productivity_subtitle": {
+        "en": "Compare productivity depth vs breadth and track weekly Agent Edits / User.",
+        "it": "Confronta profondita' e ampiezza della produttivita' e monitora gli Agent Edits / Utente settimanali.",
+    },
+    "dash_productivity_trend": {
+        "en": "Agent Edits / User — Weekly Trend (13 weeks)",
+        "it": "Agent Edits / Utente — Trend settimanale (13 settimane)",
+    },
+    "dash_help_productivity_trend": {
+        "en": "Weekly trend of autonomous code edits per active user, sampled every Wednesday for the last 13 weeks.\n\nThreshold bands are scaled dynamically using your organization's active seat ratio (avg active users \u00f7 total seats), so each band represents equivalent adoption breadth across all licensed seats:\nRed \u2014 Cautious / Legacy\nYellow \u2014 Standard Adopters\nGreen \u2014 Advanced\nBlue \u2014 Agent-First / Power Users",
+        "it": "Trend settimanale delle modifiche autonome per utente attivo, campionato ogni mercoledi' per le ultime 13 settimane.\n\nLe soglie sono scalate dinamicamente in base al rapporto tra utenti attivi e totale licenze (media utenti attivi \u00f7 totale licenze), in modo che ogni banda rappresenti un'ampiezza di adozione equivalente sull'intera base licenziata:\nRosso \u2014 Cautious / Legacy\nGiallo \u2014 Standard Adopters\nVerde \u2014 Advanced\nBlu \u2014 Agent-First / Power Users",
+    },
+    "dash_productivity_trend_seats": {
+        "en": "Agent Edits / Total Seats — Weekly Trend (13 weeks)",
+        "it": "Agent Edits / Totale Licenze — Trend settimanale (13 settimane)",
+    },
+    "dash_help_productivity_trend_seats": {
+        "en": "Weekly trend of autonomous code edits per licensed seat, sampled every Wednesday for the last 13 weeks.\n\nUnlike the Active Users chart, the denominator here is fixed (total seats), measuring breadth of adoption across the entire licensed population.",
+        "it": "Trend settimanale delle modifiche autonome per licenza, campionato ogni mercoledi' per le ultime 13 settimane.\n\nA differenza del grafico per Utenti Attivi, il denominatore e' fisso (totale licenze), misurando l'ampiezza dell'adozione sull'intera base di utenti licenziati.",
+    },
+    "product_efficiency_title": {"en": "Agent Effectiveness", "it": "Efficacia Agente"},
+    "product_efficiency_desc": {
+        "en": "Agent Edits divided by active users over the last 28 days.",
+        "it": "Agent Edits diviso Utenti Attivi negli ultimi 28 giorni.",
+    },
+    "product_real_adoption_title": {"en": "Real Adoption", "it": "Adozione Reale"},
+    "product_real_adoption_desc": {
+        "en": "Agent Edits divided by total licenses to expose true adoption breadth.",
+        "it": "Agent Edits diviso Totale Licenze per evidenziare la reale ampiezza dell'adozione.",
+    },
+    "product_badge_advanced": {"en": "Advanced", "it": "Advanced"},
+    "product_agent_edits": {"en": "Agent Edits", "it": "Agent Edits"},
+    "product_active_users": {"en": "Active Users", "it": "Utenti Attivi"},
+    "product_total_licenses": {"en": "Total Licenses", "it": "Totale Licenze"},
+    "product_weekly_average": {"en": "13w avg", "it": "Media 13s"},
+    "product_scale_cautious": {"en": "Cautious / Legacy", "it": "Cautious / Legacy"},
+    "product_scale_standard": {"en": "Standard Adopters", "it": "Standard Adopters"},
+    "product_scale_advanced": {"en": "Advanced", "it": "Advanced"},
+    "product_scale_agent_first": {"en": "Agent-First / Power Users", "it": "Agent-First / Power Users"},
     "adopt_cli_users": {"en": "CLI Users", "it": "Utenti CLI"},
     "adopt_cli_users_desc": {
         "en": "Developers who used gh copilot today. Indicates base adoption of the CLI tool.",
@@ -90,6 +175,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     },
     "dash_insights_title": {"en": "Quick Insights", "it": "Insight rapidi"},
     "insight_top_langs": {"en": "Top 5 languages", "it": "Top 5 linguaggi"},
+    "insight_top_models": {"en": "Top 5 models", "it": "Top 5 modelli"},
     "insight_top_ide": {"en": "Top IDE", "it": "IDE principale"},
     "insight_acc_trend": {"en": "Acceptance rate (7d trend)", "it": "Acceptance rate (trend 7gg)"},
     "insight_peak_day": {"en": "Peak day", "it": "Giorno di picco"},
@@ -138,6 +224,35 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "import_error": {"en": "Error", "it": "Errore"},
     "import_success": {"en": "Imported {n} employees into the database.", "it": "Importati {n} dipendenti nel database."},
     "import_unknown_error": {"en": "Unknown error", "it": "Errore sconosciuto"},
+    "import_refresh_all": {"en": "Refresh all structure(s)", "it": "Aggiorna tutta la struttura"},
+    "import_refresh_hint": {
+        "en": "Replaces the entire org structure — existing GitHub mappings will be lost",
+        "it": "Sostituisce l'intera struttura org — le mappature GitHub esistenti andranno perse",
+    },
+    "import_refresh_warning": {
+        "en": "This will delete the entire existing organization structure, including all GitHub user mappings. This action cannot be undone. Continue?",
+        "it": "Questa operazione cancellera' l'intera struttura organizzativa esistente, incluse tutte le mappature utenti GitHub. L'azione non puo' essere annullata. Continuare?",
+    },
+    "import_btn": {"en": "Import", "it": "Importa"},
+    "import_analyze": {"en": "Analyse structure", "it": "Analizza struttura"},
+    "import_analyzing": {"en": "Analysing file...", "it": "Analisi file in corso..."},
+    "import_preview_title": {"en": "Column preview", "it": "Anteprima colonne"},
+    "import_col_list_title": {"en": "Columns found", "it": "Colonne trovate"},
+    "import_col_required": {"en": "Required", "it": "Obbligatorio"},
+    "import_col_mapped": {"en": "Mapped", "it": "Mappato"},
+    "import_col_unmapped": {"en": "Not recognised", "it": "Non riconosciuto"},
+    "import_missing_required": {
+        "en": "Required fields missing from file — import blocked: ",
+        "it": "Campi obbligatori mancanti nel file — import bloccato: ",
+    },
+    "import_sample_preview": {"en": "Sample data", "it": "Dati di esempio"},
+    "import_sample_rows": {"en": "rows", "it": "righe"},
+    "import_proceed": {"en": "Proceed with import", "it": "Procedi con l'import"},
+    "import_cancel": {"en": "Cancel", "it": "Annulla"},
+    "import_preserved": {
+        "en": "{n} GitHub mappings preserved.",
+        "it": "{n} mappature GitHub preservate.",
+    },
 
     # ── Setup — Step 2: usage ────────────────────────────────
     "usage_title": {"en": "2. Load Copilot usage data", "it": "2. Carica dati utilizzo Copilot"},

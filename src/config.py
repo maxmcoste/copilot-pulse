@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -14,6 +15,34 @@ logger = logging.getLogger(__name__)
 # Load .env from project root
 _env_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(_env_path)
+
+# Runtime-writable settings file (LLM overrides only — no GitHub auth).
+SETTINGS_FILE = Path(__file__).resolve().parent.parent / "settings.json"
+
+# Keys stored in settings.json (subset of AppConfig).
+# NOTE: llm_github_token is separate from github_token (used for API auth).
+#       It is ONLY passed to the GitHub Copilot LLM provider and never touches
+#       the GitHub App / PAT authentication used for Copilot usage API calls.
+_SETTINGS_KEYS = {"llm_provider", "anthropic_api_key", "llm_model", "llm_endpoint", "llm_github_token"}
+
+
+def load_settings_file() -> dict:
+    """Return persisted LLM settings, or {} if the file does not exist."""
+    try:
+        if SETTINGS_FILE.is_file():
+            data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            return {k: v for k, v in data.items() if k in _SETTINGS_KEYS}
+    except Exception as exc:
+        logger.warning("Could not read %s: %s", SETTINGS_FILE, exc)
+    return {}
+
+
+def save_settings_file(data: dict) -> None:
+    """Persist LLM settings to settings.json (atomic write)."""
+    filtered = {k: v for k, v in data.items() if k in _SETTINGS_KEYS}
+    tmp = SETTINGS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(filtered, indent=2), encoding="utf-8")
+    tmp.replace(SETTINGS_FILE)
 
 
 class AppConfig(BaseModel):
@@ -55,6 +84,11 @@ class AppConfig(BaseModel):
     anthropic_api_key: str = Field(
         default="",
         description="Anthropic API key for Claude (required when llm_provider=anthropic)",
+    )
+    llm_github_token: str = Field(
+        default="",
+        description="GitHub PAT used exclusively for the GitHub Copilot LLM provider. "
+                    "Never used for GitHub API authentication.",
     )
 
     # App
@@ -123,14 +157,15 @@ class AppConfig(BaseModel):
                     "Set a valid Anthropic API key or switch to LLM_PROVIDER=github-copilot."
                 )
         elif self.llm_provider == "github-copilot":
-            # The github-copilot LLM provider uses the PAT as a Copilot
-            # subscription token — it is not interchangeable with a GitHub App
-            # installation token.
-            if not self.github_token:
+            # llm_github_token is the dedicated PAT for the Copilot LLM endpoint.
+            # It is completely separate from github_token (GitHub API auth).
+            if not self.llm_github_token:
                 raise ValueError(
-                    "LLM_PROVIDER=github-copilot requires GITHUB_TOKEN (a Copilot "
-                    "subscription token). GitHub App auth cannot be used for the "
-                    "LLM provider; set GITHUB_TOKEN or switch LLM_PROVIDER=anthropic."
+                    "LLM_PROVIDER=github-copilot requires LLM_GITHUB_TOKEN (a Personal "
+                    "Access Token with Copilot access). This is separate from GITHUB_TOKEN "
+                    "and does not affect GitHub API authentication. "
+                    "Set LLM_GITHUB_TOKEN in .env, or use the Settings page, "
+                    "or switch LLM_PROVIDER=anthropic."
                 )
         return self
 
@@ -144,6 +179,16 @@ def load_config() -> AppConfig:
     Raises:
         SystemExit: If required configuration is missing or invalid.
     """
+    # settings.json overrides env vars for LLM-specific keys.
+    _overrides = load_settings_file()
+
+    def _get(key: str, env_var: str, default: str = "") -> str:
+        v = _overrides.get(key, "")
+        # Discard masked values written by the UI (contain the bullet masking char).
+        if v and "•" in v:
+            v = ""
+        return v or os.getenv(env_var, default)
+
     try:
         app_id_env = os.getenv("GITHUB_APP_ID", "").strip()
         inst_id_env = os.getenv("GITHUB_APP_INSTALLATION_ID", "").strip()
@@ -156,10 +201,11 @@ def load_config() -> AppConfig:
             github_enterprise=os.getenv("GITHUB_ENTERPRISE", ""),
             github_org=os.getenv("GITHUB_ORG", ""),
             github_api_version=os.getenv("GITHUB_API_VERSION", "2026-03-10"),
-            llm_provider=os.getenv("LLM_PROVIDER", "anthropic"),
-            llm_model=os.getenv("LLM_MODEL", ""),
-            llm_endpoint=os.getenv("LLM_ENDPOINT", ""),
-            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+            llm_provider=_get("llm_provider", "LLM_PROVIDER", "anthropic"),
+            llm_model=_get("llm_model", "LLM_MODEL", ""),
+            llm_endpoint=_get("llm_endpoint", "LLM_ENDPOINT", ""),
+            anthropic_api_key=_get("anthropic_api_key", "ANTHROPIC_API_KEY", ""),
+            llm_github_token=_get("llm_github_token", "LLM_GITHUB_TOKEN", ""),
             cache_ttl_hours=int(os.getenv("CACHE_TTL_HOURS", "6")),
             web_port=int(os.getenv("WEB_PORT", "8501")),
             log_level=os.getenv("LOG_LEVEL", "INFO"),

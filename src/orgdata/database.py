@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS employees (
 );
 
 CREATE INDEX IF NOT EXISTS idx_employees_github_id ON employees(github_id);
+CREATE INDEX IF NOT EXISTS idx_employees_matricola ON employees(matricola);
 CREATE INDEX IF NOT EXISTS idx_employees_email_work ON employees(email_work);
 CREATE INDEX IF NOT EXISTS idx_employees_sup_org_6 ON employees(sup_org_level_6);
 CREATE INDEX IF NOT EXISTS idx_employees_job_family ON employees(job_family);
@@ -197,6 +198,84 @@ class OrgDatabase:
         self._conn.commit()
         logger.info("Imported %d employees", count)
         return count
+
+    def merge_employees(self, employees: list[dict[str, Any]]) -> dict[str, int]:
+        """Merge employee records preserving existing github_id mappings.
+
+        Uses matricola as the join key. For employees already in the DB,
+        all fields are updated EXCEPT github_id is preserved when the
+        incoming record has it blank but the DB has a non-empty value.
+
+        Employees in the DB but not in the new file are kept (not deleted).
+
+        Returns:
+            Dict with counts: imported, updated, preserved_mappings.
+        """
+        # Build lookup of existing github_id by matricola
+        existing = {}
+        rows = self._conn.execute(
+            "SELECT matricola, github_id FROM employees "
+            "WHERE matricola IS NOT NULL AND matricola != ''"
+        ).fetchall()
+        for row in rows:
+            existing[row["matricola"]] = row["github_id"] or ""
+
+        cols = [
+            "employee_id", "matricola", "github_id", "name", "surname",
+            "email", "email_work", "gender", "age", "date_of_birth",
+            "company", "company_ref_id", "location_country", "location", "location_id",
+            "position_title", "business_title", "job_profile", "job_family",
+            "job_code", "job_title", "job_level", "job_category", "management_level",
+            "worker_type", "employee_type", "contract_type", "time_type", "fte",
+            "is_manager", "original_hire_date", "continuous_service_date",
+            "company_service_date", "length_of_service", "time_in_position",
+            "cdc_code", "cost_center_id", "supervisory_org", "supervisory_org_id",
+            "top_level_sup_org", "sup_org_level_2", "sup_org_level_3",
+            "sup_org_level_4", "sup_org_level_5", "sup_org_level_6",
+            "sup_org_level_7", "sup_org_level_8", "sup_org_level_9",
+            "sup_org_level_10", "hr_business_partner", "hr_director",
+        ]
+        placeholders = ", ".join(["?"] * len(cols))
+        col_names = ", ".join(cols)
+        sql = f"INSERT OR REPLACE INTO employees ({col_names}) VALUES ({placeholders})"
+
+        inserted = 0
+        updated = 0
+        preserved = 0
+
+        for emp in employees:
+            matricola = str(emp.get("matricola") or "").strip()
+            incoming_gh = str(emp.get("github_id") or "").strip()
+
+            # Preserve existing github_id if incoming is blank
+            if matricola and matricola in existing:
+                updated += 1
+                db_gh = existing[matricola]
+                if not incoming_gh and db_gh:
+                    emp = dict(emp)  # shallow copy to avoid mutating original
+                    emp["github_id"] = db_gh
+                    preserved += 1
+            else:
+                inserted += 1
+
+            values = []
+            for col in cols:
+                val = emp.get(col)
+                if col == "is_manager":
+                    val = 1 if val else (0 if val is False else None)
+                if col in ("date_of_birth", "original_hire_date",
+                           "continuous_service_date", "company_service_date"):
+                    val = str(val) if val else None
+                values.append(val)
+            self._conn.execute(sql, values)
+
+        self._conn.commit()
+        logger.info(
+            "Merged employees: %d inserted, %d updated, %d github_id preserved",
+            inserted, updated, preserved,
+        )
+        return {"imported": inserted + updated, "updated": updated,
+                "inserted": inserted, "preserved_mappings": preserved}
 
     # ------------------------------------------------------------------
     # Store Copilot usage data
