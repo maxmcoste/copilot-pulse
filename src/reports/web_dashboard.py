@@ -619,10 +619,10 @@ def create_app(config: AppConfig) -> FastAPI:
                     )
                 # Engaged = unique users across the full 28-day window
                 # Active  = unique users on the latest day only (single-day snapshot)
-                latest_date = max((r.get("date", "") for r in filtered), default="")
+                latest_date = max((r.get("date") or r.get("day", "") for r in filtered), default="")
                 active = len({
                     r.get("user_login") for r in filtered
-                    if r.get("user_login") and r.get("date") == latest_date
+                    if r.get("user_login") and (r.get("date") or r.get("day", "")) == latest_date
                 })
                 engaged = len({r.get("user_login") for r in filtered if r.get("user_login")})
                 sugg, acc = 0, 0
@@ -657,10 +657,10 @@ def create_app(config: AppConfig) -> FastAPI:
                     )
                 # Engaged = unique users across the full 28-day window
                 # Active  = unique users on the latest day only (single-day snapshot)
-                latest_date = max((r.get("date", "") for r in user_records), default="")
+                latest_date = max((r.get("date") or r.get("day", "") for r in user_records), default="")
                 active = len({
                     r.get("user_login") for r in user_records
-                    if r.get("user_login") and r.get("date") == latest_date
+                    if r.get("user_login") and (r.get("date") or r.get("day", "")) == latest_date
                 })
                 engaged = len({r.get("user_login") for r in user_records if r.get("user_login")})
                 sugg, acc = 0, 0
@@ -712,22 +712,26 @@ def create_app(config: AppConfig) -> FastAPI:
                 user_records = await _get_raw_user_metrics()
                 filtered = [r for r in user_records if r.get("user_login", "").lower() in logins]
                 by_day: dict[str, set[str]] = {}
-                by_day_engaged: dict[str, set[str]] = {}
                 for r in filtered:
-                    day = r.get("day", "")
+                    # After _unwrap_day_totals the date field is "date"; fall back to "day"
+                    day = r.get("date") or r.get("day", "")
                     login = r.get("user_login", "")
                     if not day or not login:
                         continue
                     by_day.setdefault(day, set()).add(login)
-                    for feat in r.get("totals_by_feature", []):
-                        if feat.get("code_acceptance_activity_count", 0) > 0:
-                            by_day_engaged.setdefault(day, set()).add(login)
-                            break
                 days_sorted = sorted(by_day.keys())
+                # Active  = unique users on each individual day
+                # Engaged = cumulative unique users from the start of the window up to
+                #           each day (mirrors total_engaged_users rolling 28-day semantics)
+                seen: set[str] = set()
+                engaged_counts: list[int] = []
+                for d in days_sorted:
+                    seen.update(by_day[d])
+                    engaged_counts.append(len(seen))
                 return {
                     "dates": days_sorted,
                     "active_users": [len(by_day[d]) for d in days_sorted],
-                    "engaged_users": [len(by_day_engaged.get(d, set())) for d in days_sorted],
+                    "engaged_users": engaged_counts,
                 }
             except Exception as e:
                 logger.error("Chart adoption (filtered) error: %s", e)
