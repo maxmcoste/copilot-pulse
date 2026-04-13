@@ -610,6 +610,13 @@ def create_app(config: AppConfig) -> FastAPI:
             # Filtered mode — compute KPIs from user-level data
             try:
                 logins = _filter_logins(level, value)
+                # Anchor latest_date from org-level records: they always have one entry
+                # per day for all 28 days, so max(date) is reliably the most recent day
+                # with data (~today-2) regardless of how sparse user activity is.
+                org_records = await _get_raw_org_metrics()
+                latest_date = max(
+                    (r.get("date") or r.get("day", "") for r in org_records), default=""
+                )
                 user_records = await _get_raw_user_metrics()
                 filtered = [r for r in user_records if r.get("user_login", "").lower() in logins]
                 if not filtered:
@@ -618,8 +625,7 @@ def create_app(config: AppConfig) -> FastAPI:
                         f'<div class="kpi-label">{t.get("dash_active_users", "Active Users")}</div></div>'
                     )
                 # Engaged = unique users across the full 28-day window
-                # Active  = unique users on the latest day only (single-day snapshot)
-                latest_date = max((r.get("date") or r.get("day", "") for r in filtered), default="")
+                # Active  = unique users present on the latest available day
                 active = len({
                     r.get("user_login") for r in filtered
                     if r.get("user_login") and (r.get("date") or r.get("day", "")) == latest_date
@@ -649,6 +655,11 @@ def create_app(config: AppConfig) -> FastAPI:
                     f'<div class="kpi-label">Agent not initialized</div></div>'
                 )
             try:
+                # Anchor latest_date from org-level records (complete daily series)
+                org_records = await _get_raw_org_metrics()
+                latest_date = max(
+                    (r.get("date") or r.get("day", "") for r in org_records), default=""
+                )
                 user_records = await _get_raw_user_metrics()
                 if not user_records:
                     return HTMLResponse(
@@ -656,8 +667,7 @@ def create_app(config: AppConfig) -> FastAPI:
                         f'<div class="kpi-label">{t.get("dash_active_users", "Active Users")}</div></div>'
                     )
                 # Engaged = unique users across the full 28-day window
-                # Active  = unique users on the latest day only (single-day snapshot)
-                latest_date = max((r.get("date") or r.get("day", "") for r in user_records), default="")
+                # Active  = unique users present on the latest available day
                 active = len({
                     r.get("user_login") for r in user_records
                     if r.get("user_login") and (r.get("date") or r.get("day", "")) == latest_date
