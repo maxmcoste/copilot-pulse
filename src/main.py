@@ -62,6 +62,7 @@ def ask(question: str) -> None:
 def dashboard(host: str, port: int | None) -> None:
     """Start the web dashboard."""
     import uvicorn
+    from pathlib import Path
 
     from .config import load_config
     from .agent.orchestrator import Orchestrator
@@ -69,6 +70,24 @@ def dashboard(host: str, port: int | None) -> None:
 
     config = load_config()
     port = port or config.web_port
+
+    # ── Redirect all logging to a file so the terminal stays clean ──
+    log_dir = Path.home() / ".copilot-pulse"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "dashboard.log"
+
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+    )
+    root_logger = logging.getLogger()
+    # Remove any existing handlers (e.g. the StreamHandler added by basicConfig in load_config)
+    root_logger.handlers.clear()
+    root_logger.addHandler(file_handler)
+    root_logger.setLevel(getattr(logging, config.log_level, logging.INFO))
 
     app = create_app(config)
 
@@ -81,12 +100,21 @@ def dashboard(host: str, port: int | None) -> None:
             f"[bold cyan]Copilot Pulse Dashboard[/]\n\n"
             f"URL: http://localhost:{port}\n"
             f"Enterprise: {config.github_enterprise or 'N/A'}\n"
-            f"Organization: {config.github_org or 'N/A'}",
+            f"Organization: {config.github_org or 'N/A'}\n"
+            f"Logs: {log_file}",
             border_style="cyan",
         )
     )
 
-    uvicorn.run(app, host=host, port=port, log_level=config.log_level.lower())
+    # Pass log_config=None to suppress uvicorn's default console logging;
+    # uvicorn inherits the root logger configured above.
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level=config.log_level.lower(),
+        log_config=None,
+    )
 
 
 @cli.command()
