@@ -31,8 +31,8 @@ from ..web.i18n import get_translations
 
 logger = logging.getLogger(__name__)
 
-# Cache TTLs (seconds).
-# GitHub metrics have a ~2 business day lag so short TTLs only cause redundant calls.
+# Cache TTL defaults (seconds) — overridden at runtime from AppConfig / .env.
+# See CACHE_TTL_28D, CACHE_TTL_WEEKLY, CACHE_TTL_SEATS in .env.
 _TTL_28D = 1800       # 30 min — 28-day org/user report
 _TTL_WEEKLY = 3600    # 60 min — historical Wednesday snapshots never change once written
 _TTL_SEATS = 1800     # 30 min — seat assignments change rarely
@@ -200,6 +200,10 @@ def create_app(config: AppConfig) -> FastAPI:
     app.state.orchestrator = None  # Set externally before startup
 
     import time as _time
+    # Resolve TTLs from config (env-configurable); fall back to module defaults.
+    _ttl_28d = config.cache_ttl_28d
+    _ttl_weekly = config.cache_ttl_weekly
+    _ttl_seats = config.cache_ttl_seats
     # ── Org-structure filter mapping ────────────────────────────
     # github_login → {level4..level8}; populated from the SQLite org DB.
     _org_map: dict[str, dict[str, str]] = {}
@@ -255,7 +259,7 @@ def create_app(config: AppConfig) -> FastAPI:
     async def _get_raw_org_metrics() -> list[dict[str, Any]]:
         """Fetch raw (unparsed) 28-day org metrics with caching."""
         now = _time.time()
-        if _raw_cache["data"] is not None and now - _raw_cache["ts"] < _TTL_28D:
+        if _raw_cache["data"] is not None and now - _raw_cache["ts"] < _ttl_28d:
             return _raw_cache["data"]
 
         auth = build_github_auth(config)
@@ -278,7 +282,7 @@ def create_app(config: AppConfig) -> FastAPI:
     async def _get_raw_user_metrics() -> list[dict[str, Any]]:
         """Fetch raw per-user 28-day metrics with caching."""
         now = _time.time()
-        if _user_cache["data"] is not None and now - _user_cache["ts"] < _TTL_28D:
+        if _user_cache["data"] is not None and now - _user_cache["ts"] < _ttl_28d:
             return _user_cache["data"]
 
         auth = build_github_auth(config)
@@ -335,7 +339,7 @@ def create_app(config: AppConfig) -> FastAPI:
             return 0
 
         now = _time.time()
-        if _seat_cache["data"] is not None and now - _seat_cache["ts"] < _TTL_SEATS:
+        if _seat_cache["data"] is not None and now - _seat_cache["ts"] < _ttl_seats:
             return _seat_cache["data"]
 
         orch = app.state.orchestrator
@@ -371,7 +375,7 @@ def create_app(config: AppConfig) -> FastAPI:
         cache_key = f"{level}:{value}" if level and value else "__all__"
         now = _time.time()
         cached = _weekly_agent_cache.get(cache_key)
-        if cached and now - cached["ts"] < _TTL_WEEKLY:
+        if cached and now - cached["ts"] < _ttl_weekly:
             return cached["data"]
 
         # Only one coroutine per cache key may run the 13 API calls at a time.
@@ -380,7 +384,7 @@ def create_app(config: AppConfig) -> FastAPI:
         async with _weekly_agent_locks[cache_key]:
             # Re-check after acquiring lock — another waiter may have populated it.
             cached = _weekly_agent_cache.get(cache_key)
-            if cached and now - cached["ts"] < _TTL_WEEKLY:
+            if cached and now - cached["ts"] < _ttl_weekly:
                 return cached["data"]
 
             filter_logins = _filter_logins(level, value) if level and value else None

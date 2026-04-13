@@ -98,6 +98,20 @@ class AppConfig(BaseModel):
     use_legacy_api: bool = Field(default=False)
     org_structure_file: str = Field(default="", description="Path to org structure Excel file")
 
+    # Dashboard cache TTLs (seconds)
+    cache_ttl_28d: int = Field(
+        default=1800, ge=60, le=86400,
+        description="TTL in seconds for 28-day org/user metric reports (default 30 min)",
+    )
+    cache_ttl_weekly: int = Field(
+        default=3600, ge=60, le=86400,
+        description="TTL in seconds for the 13-week Wednesday series (default 60 min)",
+    )
+    cache_ttl_seats: int = Field(
+        default=1800, ge=60, le=86400,
+        description="TTL in seconds for seat/license counts (default 30 min)",
+    )
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:
@@ -207,6 +221,9 @@ def load_config() -> AppConfig:
             anthropic_api_key=_get("anthropic_api_key", "ANTHROPIC_API_KEY", ""),
             llm_github_token=_get("llm_github_token", "LLM_GITHUB_TOKEN", ""),
             cache_ttl_hours=int(os.getenv("CACHE_TTL_HOURS", "6")),
+            cache_ttl_28d=int(os.getenv("CACHE_TTL_28D", "1800")),
+            cache_ttl_weekly=int(os.getenv("CACHE_TTL_WEEKLY", "3600")),
+            cache_ttl_seats=int(os.getenv("CACHE_TTL_SEATS", "1800")),
             web_port=int(os.getenv("WEB_PORT", "8501")),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             use_legacy_api=os.getenv("USE_LEGACY_API", "false").lower() == "true",
