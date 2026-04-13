@@ -126,8 +126,38 @@ body {
 
 .dashboard-header-top {
     display: flex;
-    flex-direction: column;
+    align-items: flex-start;
+    justify-content: space-between;
     gap: 12px;
+}
+
+.dashboard-header-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.btn-export-snapshot {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.btn-export-snapshot:hover {
+    color: var(--accent-blue);
+    border-color: var(--accent-blue);
+}
+
+.btn-export-snapshot:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 .dashboard-header h1 {
@@ -200,6 +230,30 @@ body {
     background: var(--accent-red);
     color: white;
     border-color: var(--accent-red);
+}
+
+.filter-apply-btn {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 5px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.filter-apply-btn:hover {
+    background: var(--accent-blue);
+    color: #fff;
+    border-color: var(--accent-blue);
+}
+
+.filter-apply-btn--pending {
+    background: var(--accent-blue);
+    color: #fff;
+    border-color: var(--accent-blue);
 }
 
 /* KPI Cards */
@@ -689,6 +743,119 @@ body {
 
 .roi-positive { color: #3fb950; }
 .roi-negative { color: #f85149; }
+
+/* ── Virtual FTE Analysis ───────────────────────────────────── */
+.vfte-widget {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 24px;
+}
+
+.vfte-params {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-items: flex-end;
+    margin: 16px 0;
+    padding: 16px;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+}
+
+.vfte-recalc-btn {
+    align-self: flex-end;
+    margin-top: 4px;
+}
+
+.vfte-kpi-row {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+}
+
+.vfte-kpi {
+    flex: 1;
+    min-width: 140px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 14px 16px;
+    text-align: center;
+}
+
+.vfte-kpi-value {
+    font-size: 26px;
+    font-weight: 700;
+    color: #58a6ff;
+    line-height: 1.2;
+}
+
+.vfte-kpi-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+}
+
+.vfte-table-wrap {
+    overflow-x: auto;
+    margin-bottom: 16px;
+}
+
+.vfte-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.vfte-table th {
+    text-align: left;
+    padding: 8px 12px;
+    background: var(--bg-tertiary);
+    border-bottom: 2px solid var(--border-color);
+    color: var(--text-secondary);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.vfte-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-primary);
+}
+
+.vfte-table tbody tr:hover {
+    background: var(--bg-tertiary);
+}
+
+.vfte-fte-cell {
+    font-weight: 700;
+    color: #3fb950;
+}
+
+.vfte-insight {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    background: rgba(88, 166, 255, 0.08);
+    border: 1px solid rgba(88, 166, 255, 0.25);
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text-primary);
+}
+
+.vfte-insight-icon {
+    font-size: 18px;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
 
 .agent-scale {
     margin-top: 8px;

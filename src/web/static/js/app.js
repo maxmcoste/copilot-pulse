@@ -1075,7 +1075,7 @@ function initROI() {
 
     function recalc() {
         if (!roiData) return;
-        var rate = parseFloat(document.getElementById('roiHourlyRate').value) || 60;
+        var rate = parseFloat(document.getElementById('roiHourlyRate').value) || 33;
         var license = parseFloat(document.getElementById('roiLicenseCost').value) || 39;
         var minPerEdit = parseFloat(document.getElementById('roiMinPerEdit').value) || 10;
         var reviewPct = parseFloat(document.getElementById('roiReviewFactor').value) || 20;
@@ -1126,7 +1126,8 @@ function initROI() {
 // ── Org Filters ─────────────────────────────────────────────
 
 var _orgFilterData = null; // cached from /api/org-filters
-var _activeFilter = { level: null, value: null };
+var _activeFilter  = { level: null, value: null };  // current dropdown selection
+var _appliedFilter = { level: null, value: null };  // last filter sent to the dashboard
 
 function initOrgFilters() {
     var bar = document.getElementById('orgFilterBar');
@@ -1138,9 +1139,9 @@ function initOrgFilters() {
     var sel7 = document.getElementById('filterLevel7');
     var sel8 = document.getElementById('filterLevel8');
     var resetBtn = document.getElementById('filterReset');
+    var applyBtn = document.getElementById('filterApply');
 
     function resetFrom(level) {
-        // Reset all selects from the given level downward
         var chain = [
             { sel: sel5, placeholder: '— Level 5 —' },
             { sel: sel6, placeholder: '— Level 6 —' },
@@ -1167,13 +1168,23 @@ function initOrgFilters() {
         }
     }
 
+    // Highlight the Apply button when the dropdown selection differs from what's applied.
+    function updateApplyBtn() {
+        if (!applyBtn) return;
+        var pending = _activeFilter.level + ':' + _activeFilter.value;
+        var applied = _appliedFilter.level + ':' + _appliedFilter.value;
+        if (pending !== applied) {
+            applyBtn.classList.add('filter-apply-btn--pending');
+        } else {
+            applyBtn.classList.remove('filter-apply-btn--pending');
+        }
+    }
+
     fetch('/api/org-filters')
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (!data.enabled) { bar.style.display = 'none'; return; }
             _orgFilterData = data;
-
-            // Populate level 4 (top-level)
             data.levels['4'].forEach(function(v) {
                 var opt = document.createElement('option');
                 opt.value = v; opt.textContent = v;
@@ -1186,65 +1197,69 @@ function initOrgFilters() {
         if (!this.value) {
             _activeFilter = { level: null, value: null };
             resetBtn.style.display = 'none';
-            refreshDashboard();
-            return;
+        } else {
+            _activeFilter = { level: '4', value: this.value };
+            resetBtn.style.display = '';
+            populateChildren('4', this.value, sel5);
         }
-        _activeFilter = { level: '4', value: this.value };
-        resetBtn.style.display = '';
-        populateChildren('4', this.value, sel5);
-        refreshDashboard();
+        updateApplyBtn();
     });
 
     sel5.addEventListener('change', function() {
         resetFrom('6');
         if (!this.value) {
             _activeFilter = { level: '4', value: sel4.value };
-            refreshDashboard();
-            return;
+        } else {
+            _activeFilter = { level: '5', value: this.value };
+            populateChildren('5', this.value, sel6);
         }
-        _activeFilter = { level: '5', value: this.value };
-        populateChildren('5', this.value, sel6);
-        refreshDashboard();
+        updateApplyBtn();
     });
 
     sel6.addEventListener('change', function() {
         resetFrom('7');
         if (!this.value) {
             _activeFilter = { level: '5', value: sel5.value };
-            refreshDashboard();
-            return;
+        } else {
+            _activeFilter = { level: '6', value: this.value };
+            populateChildren('6', this.value, sel7);
         }
-        _activeFilter = { level: '6', value: this.value };
-        populateChildren('6', this.value, sel7);
-        refreshDashboard();
+        updateApplyBtn();
     });
 
     sel7.addEventListener('change', function() {
         resetFrom('8');
         if (!this.value) {
             _activeFilter = { level: '6', value: sel6.value };
-            refreshDashboard();
-            return;
+        } else {
+            _activeFilter = { level: '7', value: this.value };
+            populateChildren('7', this.value, sel8);
         }
-        _activeFilter = { level: '7', value: this.value };
-        populateChildren('7', this.value, sel8);
-        refreshDashboard();
+        updateApplyBtn();
     });
 
     sel8.addEventListener('change', function() {
-        if (!this.value) {
-            _activeFilter = { level: '7', value: sel7.value };
-        } else {
-            _activeFilter = { level: '8', value: this.value };
-        }
-        refreshDashboard();
+        _activeFilter = this.value
+            ? { level: '8', value: this.value }
+            : { level: '7', value: sel7.value };
+        updateApplyBtn();
     });
+
+    if (applyBtn) {
+        applyBtn.addEventListener('click', function() {
+            _appliedFilter = { level: _activeFilter.level, value: _activeFilter.value };
+            updateApplyBtn();
+            refreshDashboard();
+        });
+    }
 
     resetBtn.addEventListener('click', function() {
         sel4.value = '';
         resetFrom('5');
-        _activeFilter = { level: null, value: null };
+        _activeFilter  = { level: null, value: null };
+        _appliedFilter = { level: null, value: null };
         resetBtn.style.display = 'none';
+        updateApplyBtn();
         refreshDashboard();
     });
 }
@@ -1292,6 +1307,252 @@ function refreshDashboard() {
     initDashboardCharts();
     // Refresh ROI
     initROI();
+    // Refresh Virtual FTE
+    loadVirtualFTE();
+}
+
+// ── Virtual FTE Analysis ─────────────────────────────────────
+
+function loadVirtualFTE() {
+    var resultsEl = document.getElementById('vfteResults');
+    if (!resultsEl) return;
+
+    var linesPerDay        = parseInt(document.getElementById('vfteLinesPerDay')?.value)        || 50;
+    var workingDays        = parseInt(document.getElementById('vfteWorkingDays')?.value)        || 20;
+    var reviewPct          = parseFloat(document.getElementById('vfteReviewOverhead')?.value)   || 20;
+    var hourlyRate         = parseFloat(document.getElementById('vfteHourlyRate')?.value)        || 33;
+    var dailyHours         = parseInt(document.getElementById('vfteDailyHours')?.value)         || 8;
+    var linesPerAgentEdit  = parseInt(document.getElementById('vfteLinesPerAgentEdit')?.value)  || 17;
+
+    var qs = (typeof filterQueryString === 'function') ? filterQueryString() : '';
+    var sep = qs ? '&' : '?';
+    var params = qs +
+        sep + 'lines_per_day=' + linesPerDay +
+        '&working_days=' + workingDays +
+        '&review_overhead=' + (reviewPct / 100) +
+        '&hourly_rate=' + hourlyRate +
+        '&daily_hours=' + dailyHours +
+        '&lines_per_agent_edit=' + linesPerAgentEdit;
+
+    resultsEl.innerHTML = '<p style="color:var(--text-secondary);font-size:13px;">' + (T().dash_loading || 'Loading...') + '</p>';
+
+    fetch('/api/virtual-fte' + params)
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.error) {
+                resultsEl.innerHTML = '<p style="color:#f85149">' + data.error + '</p>';
+                return;
+            }
+            if (!data.periods || data.periods.length === 0) {
+                resultsEl.innerHTML = '<p style="color:var(--text-secondary);font-size:13px;">' +
+                    (T().vfte_no_data || 'No line data available yet.') + '</p>';
+                return;
+            }
+
+            var t = T();
+            var fmt = function(n) {
+                if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+                if (n >= 1000) return (n/1000).toFixed(1) + 'K';
+                return n.toLocaleString();
+            };
+            var fmtEur = function(n) { return '€' + Math.round(n).toLocaleString(); };
+
+            // Table — shows full breakdown: IDE lines, Agent lines, Total, FTE, Value
+            var rows = data.periods.map(function(p) {
+                return '<tr>' +
+                    '<td>' + p.period + '</td>' +
+                    '<td>' + fmt(p.volume_ide) + '</td>' +
+                    '<td>' + fmt(p.volume_agent) + '</td>' +
+                    '<td><strong>' + fmt(p.total_lines) + '</strong></td>' +
+                    '<td>' + fmt(p.human_capacity) + '</td>' +
+                    '<td class="vfte-fte-cell">' + p.fte.toFixed(2) + '</td>' +
+                    '<td>' + fmtEur(p.monthly_value) + '</td>' +
+                    '</tr>';
+            }).join('');
+
+            var table = '<div class="vfte-table-wrap"><table class="vfte-table">' +
+                '<thead><tr>' +
+                '<th>' + (t.vfte_col_period     || 'Period')              + '</th>' +
+                '<th>' + (t.vfte_col_vol_ide    || 'IDE Lines')           + '</th>' +
+                '<th>' + (t.vfte_col_vol_agent  || 'Agent Lines')         + '</th>' +
+                '<th>' + (t.vfte_col_total_lines|| 'Total Lines (net)')   + '</th>' +
+                '<th>' + (t.vfte_col_capacity   || 'Human Capacity')      + '</th>' +
+                '<th>' + (t.vfte_col_fte        || 'Virtual FTE')         + '</th>' +
+                '<th>' + (t.vfte_col_value      || 'Monthly Value')       + '</th>' +
+                '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+
+            // KPI summary
+            var latestPeriod = data.periods[data.periods.length - 1];
+            var capacityPct = data.total_seats > 0
+                ? ' (+' + (data.avg_fte / data.total_seats * 100).toFixed(0) + '% capacity)'
+                : '';
+            var kpis = '<div class="vfte-kpi-row">' +
+                '<div class="vfte-kpi">' +
+                '  <div class="vfte-kpi-value">' + data.avg_fte.toFixed(2) + '</div>' +
+                '  <div class="vfte-kpi-label">' + (t.vfte_avg_fte || 'Avg. Virtual FTE (13w)') + '</div>' +
+                '</div>' +
+                '<div class="vfte-kpi">' +
+                '  <div class="vfte-kpi-value">' + fmtEur(latestPeriod.monthly_value) + '</div>' +
+                '  <div class="vfte-kpi-label">' + (t.vfte_monthly_roi || 'Monthly ROI (latest period)') + '</div>' +
+                '</div>' +
+                '<div class="vfte-kpi">' +
+                '  <div class="vfte-kpi-value">' + latestPeriod.fte.toFixed(2) + '</div>' +
+                '  <div class="vfte-kpi-label">' + (t.vfte_col_fte || 'Virtual FTE') + ' — ' + latestPeriod.period + '</div>' +
+                '</div>' +
+                '</div>';
+
+            // Insight
+            var insight = '<div class="vfte-insight">' +
+                '<span class="vfte-insight-icon">💡</span>' +
+                '<span>' +
+                (t.vfte_insight_prefix || 'Thanks to Copilot adoption, the organisation operated as if it had added') +
+                ' <strong>' + data.avg_fte.toFixed(1) + '</strong> ' +
+                (t.vfte_insight_suffix || 'developers to the team, increasing productive capacity without changes to actual headcount.') +
+                (capacityPct ? ' <em>' + capacityPct + '</em>' : '') +
+                '</span></div>';
+
+            resultsEl.innerHTML = kpis + table + insight;
+        })
+        .catch(function(e) {
+            resultsEl.innerHTML = '<p style="color:#f85149">Error: ' + e.message + '</p>';
+        });
+}
+
+// ── Export Snapshot ─────────────────────────────────────────
+
+async function exportSnapshot() {
+    var btn = document.getElementById('exportSnapshotBtn');
+    var originalText = btn ? btn.textContent.trim() : 'Export Snapshot';
+    if (btn) { btn.textContent = '⏳ Exporting…'; btn.disabled = true; }
+
+    try {
+        // 1. Inline CSS
+        var cssText = '';
+        try {
+            var cssResp = await fetch('/static/css/dashboard.css');
+            cssText = await cssResp.text();
+        } catch(e) {}
+
+        // 2. Convert Plotly charts to PNG images
+        var CHART_IDS = [
+            'adoptionChart', 'featureChart', 'topUsersChart',
+            'suggestedAcceptedChart', 'usageTrendChart',
+            'productivityTrendChart', 'productivityTrendSeatsChart',
+        ];
+        var chartImages = {};
+        await Promise.all(CHART_IDS.map(async function(id) {
+            var el = document.getElementById(id);
+            if (!el || !el.data || !el.data.length) return;
+            try {
+                var w = Math.max(el.clientWidth || 0, 600);
+                var h = Math.max(el.clientHeight || 0, 320);
+                chartImages[id] = await Plotly.toImage(el, { format: 'png', width: w, height: h });
+            } catch(e) {}
+        }));
+
+        // 3. Clone main content, strip interactivity
+        var main = document.querySelector('main.container');
+        if (!main) throw new Error('Could not find dashboard content');
+        var clone = main.cloneNode(true);
+
+        // Replace each Plotly chart div with a static <img>
+        CHART_IDS.forEach(function(id) {
+            var div = clone.querySelector('#' + id);
+            if (!div) return;
+            if (chartImages[id]) {
+                div.innerHTML = '<img src="' + chartImages[id] + '" style="width:100%;height:auto;display:block;">';
+            } else {
+                div.innerHTML = '<p style="color:#8b949e;padding:16px">Chart not available</p>';
+            }
+            div.style.height = 'auto';
+            div.style.minHeight = '0';
+        });
+
+        // Remove interactive / noisy elements
+        var removeSelectors = [
+            '.org-filter-bar',
+            '.btn-export-snapshot',
+            '.chart-help-btn',
+            '.chart-help-text',
+            '.filter-reset-btn',
+            '.dashboard-header-right',   // whole right cluster (filters + button)
+        ];
+        removeSelectors.forEach(function(sel) {
+            clone.querySelectorAll(sel).forEach(function(el) { el.remove(); });
+        });
+
+        // Replace ROI inputs with plain values so the snapshot still shows the numbers
+        ['roiHourlyRate', 'roiLicenseCost', 'roiMinPerEdit', 'roiReviewFactor'].forEach(function(id) {
+            var inp = clone.querySelector('#' + id);
+            if (!inp) return;
+            var wrap = inp.closest('.roi-input-wrap');
+            if (wrap) {
+                var unit = wrap.querySelector('.roi-unit');
+                var unitText = unit ? unit.textContent : '';
+                var span = document.createElement('span');
+                span.style.cssText = 'font-weight:600;color:var(--text-primary)';
+                span.textContent = inp.value + ' ' + unitText;
+                wrap.replaceWith(span);
+            }
+        });
+
+        // Strip HTMX attributes
+        clone.querySelectorAll('[hx-get],[hx-post],[hx-trigger],[hx-swap]').forEach(function(el) {
+            ['hx-get','hx-post','hx-trigger','hx-swap','hx-target'].forEach(function(a) { el.removeAttribute(a); });
+        });
+
+        // 4. Build filter label for the banner
+        var filterLabel = '';
+        if (typeof _activeFilter !== 'undefined' && _activeFilter.level && _activeFilter.value) {
+            filterLabel = ' · Filter: ' + _activeFilter.value;
+        } else {
+            filterLabel = ' · All Users';
+        }
+        var now = new Date();
+        var ts = now.getUTCFullYear() + '-' +
+            String(now.getUTCMonth() + 1).padStart(2, '0') + '-' +
+            String(now.getUTCDate()).padStart(2, '0') + ' ' +
+            String(now.getUTCHours()).padStart(2, '0') + ':' +
+            String(now.getUTCMinutes()).padStart(2, '0');
+        var fileName = 'copilot-pulse-' + ts.replace(/[: ]/g, '-') + '.html';
+
+        // 5. Assemble the static HTML document
+        var html = '<!DOCTYPE html>\n' +
+            '<html lang="en">\n<head>\n' +
+            '<meta charset="UTF-8">\n' +
+            '<meta name="viewport" content="width=device-width, initial-scale=1.0">\n' +
+            '<title>Copilot Pulse Snapshot \u2014 ' + ts + '</title>\n' +
+            '<style>\n' +
+            '*, *::before, *::after { box-sizing: border-box; }\n' +
+            'body { margin: 0; background: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }\n' +
+            '.snapshot-banner { background: #161b22; border-bottom: 2px solid #58a6ff; padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; }\n' +
+            '.snapshot-title { color: #58a6ff; font-weight: 600; font-size: 15px; }\n' +
+            '.snapshot-meta { color: #8b949e; font-size: 12px; }\n' +
+            cssText + '\n' +
+            '</style>\n</head>\n<body>\n' +
+            '<div class="snapshot-banner">\n' +
+            '  <span class="snapshot-title">&#9672; Copilot Pulse \u2014 Dashboard Snapshot</span>\n' +
+            '  <span class="snapshot-meta">Exported: ' + ts + ' UTC' + filterLabel + '</span>\n' +
+            '</div>\n' +
+            clone.outerHTML + '\n' +
+            '</body>\n</html>';
+
+        // 6. Trigger download
+        var blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function() { URL.revokeObjectURL(url); }, 2000);
+
+    } catch(e) {
+        alert('Export failed: ' + e.message);
+    } finally {
+        if (btn) { btn.textContent = originalText; btn.disabled = false; }
+    }
 }
 
 // ── Initialize ──────────────────────────────────────────────
@@ -1302,4 +1563,5 @@ document.addEventListener('DOMContentLoaded', function() {
     initOrgFilters();
     initDashboardCharts();
     initROI();
+    loadVirtualFTE();
 });

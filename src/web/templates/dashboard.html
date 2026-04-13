@@ -24,27 +24,33 @@
             <h1>{{ t.dash_title }}</h1>
             <p class="subtitle">Enterprise: {{ enterprise or 'N/A' }} · Org: {{ org or 'N/A' }}</p>
         </div>
-        {% if has_org_filters %}
-        <div class="org-filter-bar" id="orgFilterBar">
-            <label class="filter-label">Filter:</label>
-            <select id="filterLevel4" class="filter-select">
-                <option value="">All users</option>
-            </select>
-            <select id="filterLevel5" class="filter-select" disabled>
-                <option value="">— Level 5 —</option>
-            </select>
-            <select id="filterLevel6" class="filter-select" disabled>
-                <option value="">— Level 6 —</option>
-            </select>
-            <select id="filterLevel7" class="filter-select" disabled>
-                <option value="">— Level 7 —</option>
-            </select>
-            <select id="filterLevel8" class="filter-select" disabled>
-                <option value="">— Level 8 —</option>
-            </select>
-            <button id="filterReset" class="filter-reset-btn" style="display:none" title="Reset filter">✕</button>
+        <div class="dashboard-header-right">
+            {% if has_org_filters %}
+            <div class="org-filter-bar" id="orgFilterBar">
+                <label class="filter-label">Filter:</label>
+                <select id="filterLevel4" class="filter-select">
+                    <option value="">All users</option>
+                </select>
+                <select id="filterLevel5" class="filter-select" disabled>
+                    <option value="">— Level 5 —</option>
+                </select>
+                <select id="filterLevel6" class="filter-select" disabled>
+                    <option value="">— Level 6 —</option>
+                </select>
+                <select id="filterLevel7" class="filter-select" disabled>
+                    <option value="">— Level 7 —</option>
+                </select>
+                <select id="filterLevel8" class="filter-select" disabled>
+                    <option value="">— Level 8 —</option>
+                </select>
+                <button id="filterReset" class="filter-reset-btn" style="display:none" title="Reset filter">✕</button>
+                <button id="filterApply" class="filter-apply-btn" title="Apply filter">{{ t.filter_apply }}</button>
+            </div>
+            {% endif %}
+            <button class="btn-export-snapshot" id="exportSnapshotBtn" onclick="exportSnapshot()">
+                &#x2913; {{ t.export_snapshot }}
+            </button>
         </div>
-        {% endif %}
     </div>
 </div>
 
@@ -134,7 +140,7 @@
             <div class="roi-field">
                 <label for="roiHourlyRate">{{ t.roi_hourly_rate }}</label>
                 <div class="roi-input-wrap">
-                    <input type="number" id="roiHourlyRate" value="28" min="1" step="5">
+                    <input type="number" id="roiHourlyRate" value="33" min="1" step="5">
                     <span class="roi-unit">€/h</span>
                 </div>
             </div>
@@ -191,6 +197,65 @@
                 <div class="roi-kpi-label">Agent Edits (28d)</div>
             </div>
         </div>
+    </div>
+</div>
+
+<!-- Virtual FTE Analysis -->
+<div class="vfte-widget" id="vfteWidget">
+    <div class="roi-header">
+        <h3>{{ t.vfte_title }}</h3>
+        <button class="chart-help-btn" onclick="toggleChartHelp(this)" title="Info">?</button>
+    </div>
+    <div class="chart-help-text" style="display:none;">{{ t.vfte_help }}</div>
+
+    <div class="vfte-params">
+        <div class="roi-field">
+            <label for="vfteLinesPerDay">{{ t.vfte_lines_per_day }}</label>
+            <div class="roi-input-wrap">
+                <input type="number" id="vfteLinesPerDay" value="50" min="1" step="5">
+                <span class="roi-unit">{{ t.vfte_lines_unit }}</span>
+            </div>
+        </div>
+        <div class="roi-field">
+            <label for="vfteWorkingDays">{{ t.vfte_working_days }}</label>
+            <div class="roi-input-wrap">
+                <input type="number" id="vfteWorkingDays" value="20" min="1" max="31" step="1">
+                <span class="roi-unit">{{ t.vfte_days_unit }}</span>
+            </div>
+        </div>
+        <div class="roi-field">
+            <label for="vfteReviewOverhead">{{ t.vfte_review_overhead }}</label>
+            <div class="roi-input-wrap">
+                <input type="number" id="vfteReviewOverhead" value="20" min="0" max="100" step="5">
+                <span class="roi-unit">%</span>
+            </div>
+        </div>
+        <div class="roi-field">
+            <label for="vfteHourlyRate">{{ t.vfte_hourly_rate }}</label>
+            <div class="roi-input-wrap">
+                <input type="number" id="vfteHourlyRate" value="33" min="1" step="1">
+                <span class="roi-unit">€/h</span>
+            </div>
+        </div>
+        <div class="roi-field">
+            <label for="vfteDailyHours">{{ t.vfte_daily_hours }}</label>
+            <div class="roi-input-wrap">
+                <input type="number" id="vfteDailyHours" value="8" min="1" max="24" step="1">
+                <span class="roi-unit">h</span>
+            </div>
+        </div>
+        <div class="roi-field">
+            <label for="vfteLinesPerAgentEdit">{{ t.vfte_lines_per_agent_edit }}</label>
+            <div class="roi-input-wrap">
+                <input type="number" id="vfteLinesPerAgentEdit" value="17" min="1" step="1">
+                <span class="roi-unit">{{ t.vfte_lines_unit }}</span>
+            </div>
+        </div>
+        <button class="btn btn-primary vfte-recalc-btn" onclick="loadVirtualFTE()">{{ t.vfte_recalculate }}</button>
+    </div>
+
+    <div id="vfteResults">
+        <p style="color:var(--text-secondary);font-size:13px;">{{ t.dash_loading }}</p>
     </div>
 </div>
 

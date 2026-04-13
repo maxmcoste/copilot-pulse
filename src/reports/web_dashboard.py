@@ -401,6 +401,7 @@ def create_app(config: AppConfig) -> FastAPI:
             agent_edits_values: list[int] = []
             active_users_values: list[int] = []
             ratio_values: list[float] = []
+            lines_accepted_values: list[int] = []
 
             for week_date, result in zip(weeks, results):
                 labels.append(f"W{week_date.isocalendar()[1]} ({week_date.strftime('%d/%m')})")
@@ -408,6 +409,7 @@ def create_app(config: AppConfig) -> FastAPI:
                     agent_edits_values.append(0)
                     active_users_values.append(0)
                     ratio_values.append(0.0)
+                    lines_accepted_values.append(0)
                     continue
 
                 if use_user_endpoint:
@@ -419,6 +421,12 @@ def create_app(config: AppConfig) -> FastAPI:
                     active_users = len({
                         r.get("user_login") for r in filtered if r.get("user_login")
                     })
+                    lines_accepted = sum(
+                        feat.get("lines_accepted", 0) or feat.get("code_acceptance_activity_count", 0)
+                        for r in filtered
+                        for feat in r.get("totals_by_feature", [])
+                        if feat.get("feature") == "code_completion"
+                    )
                 else:
                     rec = result
                     agent_edits = _sum_agent_edits([rec])
@@ -428,16 +436,23 @@ def create_app(config: AppConfig) -> FastAPI:
                         or rec.get("total_active_users")
                         or 0
                     )
+                    comp = rec.get("copilot_ide_code_completions") or {}
+                    lines_accepted = (
+                        comp.get("total_lines_accepted", 0)
+                        or comp.get("total_code_acceptances", 0)
+                    )
 
                 agent_edits_values.append(agent_edits)
                 active_users_values.append(active_users)
                 ratio_values.append(round(agent_edits / active_users, 1) if active_users else 0.0)
+                lines_accepted_values.append(lines_accepted)
 
             data = {
                 "labels": labels,
                 "agent_edits": agent_edits_values,
                 "active_users": active_users_values,
                 "ratios": ratio_values,
+                "lines_accepted": lines_accepted_values,
             }
             _weekly_agent_cache[cache_key] = {"data": data, "ts": now}
             return data
@@ -594,7 +609,9 @@ def create_app(config: AppConfig) -> FastAPI:
                     f'<div class="kpi-label">{e}</div></div>'
                 )
         else:
-            # Unfiltered mode — use org-level aggregates
+            # Unfiltered mode — count unique users from user-level data (same 28-day
+            # window as the filtered path) so the numbers are directly comparable.
+            # Org-level aggregate is only used for suggestions/acceptances.
             orch = app.state.orchestrator
             if not orch:
                 return HTMLResponse(
@@ -602,38 +619,36 @@ def create_app(config: AppConfig) -> FastAPI:
                     f'<div class="kpi-label">Agent not initialized</div></div>'
                 )
             try:
-                result = await orch._tool_org_metrics({
-                    "org": config.github_org,
-                    "period": "28-day",
-                })
+                user_records = await _get_raw_user_metrics()
+                if not user_records:
+                    return HTMLResponse(
+                        f'<div class="kpi-card"><div class="kpi-value">0</div>'
+                        f'<div class="kpi-label">{t.get("dash_active_users", "Active Users")}</div></div>'
+                    )
+                engaged_users_all: set[str] = set()
+                sugg, acc = 0, 0
+                for rec in user_records:
+                    login = rec.get("user_login")
+                    for feat in rec.get("totals_by_feature", []):
+                        feat_acc = feat.get("code_acceptance_activity_count", 0)
+                        sugg += feat.get("code_generation_activity_count", 0)
+                        acc += feat_acc
+                        if feat_acc > 0 and login:
+                            engaged_users_all.add(login)
+                active = len({r.get("user_login") for r in user_records if r.get("user_login")})
+                engaged = len(engaged_users_all)
+                rate = f"{acc / sugg * 100:.1f}%" if sugg else "N/A"
+                seats_label = "N/A"
+                seat_result = await orch._tool_seat_info({"org": config.github_org})
+                total = seat_result.get("seat_info", {}).get("total_seats", 0)
+                if total:
+                    seats_label = str(total)
             except Exception as e:
                 logger.error("API metrics error: %s", e)
                 return HTMLResponse(
                     f'<div class="kpi-card"><div class="kpi-value">!</div>'
                     f'<div class="kpi-label">{e}</div></div>'
                 )
-            metrics_list = result.get("metrics", [])
-            if not metrics_list:
-                return HTMLResponse(
-                    f'<div class="kpi-card"><div class="kpi-value">0</div>'
-                    f'<div class="kpi-label">{t.get("dash_active_users", "Active Users")}</div></div>'
-                )
-            latest = max(metrics_list, key=lambda m: m.get("date", ""))
-            active = latest.get("total_active_users", 0)
-            engaged = latest.get("total_engaged_users", 0)
-            comp = latest.get("copilot_ide_code_completions") or {}
-            sugg = comp.get("total_code_suggestions", 0)
-            acc = comp.get("total_code_acceptances", 0)
-            rate = f"{acc / sugg * 100:.1f}%" if sugg else "N/A"
-            seats_label = "N/A"
-            try:
-                seat_result = await orch._tool_seat_info({"org": config.github_org})
-                seat_info = seat_result.get("seat_info", {})
-                total = seat_info.get("total_seats", 0)
-                if total:
-                    seats_label = str(total)
-            except Exception:
-                pass
 
         html = (
             f'<div class="kpi-card">'
@@ -1086,6 +1101,87 @@ def create_app(config: AppConfig) -> FastAPI:
             }
         except Exception as e:
             logger.error("Chart agent-edits-wow error: %s", e)
+            return {"error": str(e)}
+
+    @app.get("/api/virtual-fte")
+    async def api_virtual_fte(
+        request: Request,
+        lines_per_day: int = 50,
+        working_days: int = 20,
+        review_overhead: float = 0.20,
+        hourly_rate: float = 33.0,
+        daily_hours: int = 8,
+        lines_per_agent_edit: int = 17,
+    ):
+        """Return Virtual FTE analysis combining IDE completions + Agent edits (last 13 weeks).
+
+        Formula:
+          volume_ide    = code_lines_accepted  (from IDE completions)
+          volume_agent  = agent_edits × lines_per_agent_edit
+          total_lines   = (volume_ide + volume_agent) × (1 − review_overhead)
+          fte           = total_lines / (lines_per_day × working_days)
+        """
+        try:
+            series = await _get_weekly_agent_series(request)
+            weeks = _weekly_reference_dates()
+            lines_series  = series.get("lines_accepted", [0] * len(weeks))
+            edits_series  = series.get("agent_edits",   [0] * len(weeks))
+
+            # Group weekly samples by calendar month.
+            # Each Wednesday sample × 7 approximates the full-week contribution.
+            monthly: dict[str, dict[str, Any]] = {}
+            for week_date, lines_day, edits_day in zip(weeks, lines_series, edits_series):
+                month_key = week_date.strftime("%b %Y")
+                sort_key  = week_date.strftime("%Y-%m")
+                if month_key not in monthly:
+                    monthly[month_key] = {
+                        "volume_ide": 0, "volume_agent": 0, "sort_key": sort_key
+                    }
+                monthly[month_key]["volume_ide"]   += lines_day  * 7
+                monthly[month_key]["volume_agent"] += edits_day  * 7 * lines_per_agent_edit
+
+            human_capacity   = lines_per_day * working_days
+            monthly_dev_cost = hourly_rate * daily_hours * working_days
+
+            periods = []
+            for month_key in sorted(monthly, key=lambda k: monthly[k]["sort_key"]):
+                d = monthly[month_key]
+                vol_ide   = d["volume_ide"]
+                vol_agent = d["volume_agent"]
+                total_lines = (vol_ide + vol_agent) * (1.0 - review_overhead)
+                fte   = round(total_lines / human_capacity, 2) if human_capacity else 0.0
+                value = round(fte * monthly_dev_cost, 0)
+                periods.append({
+                    "period":       month_key,
+                    "volume_ide":   int(vol_ide),
+                    "volume_agent": int(vol_agent),
+                    "total_lines":  int(total_lines),
+                    "human_capacity": int(human_capacity),
+                    "fte":          fte,
+                    "monthly_value": int(value),
+                })
+
+            if not periods:
+                return {
+                    "periods": [],
+                    "avg_fte": 0,
+                    "monthly_dev_cost": int(monthly_dev_cost),
+                    "human_capacity": int(human_capacity),
+                }
+
+            avg_fte = round(sum(p["fte"] for p in periods) / len(periods), 2)
+            level, value = _parse_filter(request)
+            total_seats = await _resolve_total_licenses(request, is_filtered=bool(level and value))
+
+            return {
+                "periods": periods,
+                "avg_fte": avg_fte,
+                "monthly_dev_cost": int(monthly_dev_cost),
+                "human_capacity": int(human_capacity),
+                "total_seats": total_seats,
+            }
+        except Exception as e:
+            logger.error("Virtual FTE error: %s", e)
             return {"error": str(e)}
 
     @app.get("/api/adoption-kpis", response_class=HTMLResponse)

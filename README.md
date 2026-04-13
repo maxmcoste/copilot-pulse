@@ -8,6 +8,10 @@ AI-powered conversational agent for GitHub Copilot usage analytics. Ask question
 - **GitHub Copilot Metrics** — Fetches data from both the new Usage Metrics API (GA) and legacy Metrics API
 - **Rich terminal output** — Tables, charts, sparklines, and color-coded insights via Rich
 - **Web dashboard** — FastAPI + HTMX dark-themed dashboard with Plotly interactive charts
+- **Org-level filtering** — Filter all dashboard metrics by org hierarchy levels (L4–L8) using an Apply button that batches API calls
+- **Export Snapshot** — Download a fully self-contained static HTML file of the current filtered dashboard view
+- **ROI Calculator** — Real-time economic value estimate of Copilot Agent investment over 28 days
+- **Virtual FTE Analysis** — Monthly breakdown of virtual developer capacity added by IDE completions and Agent Edits combined
 - **Export reports** — Generate CSV, Excel (with formatting), and PDF reports
 - **Smart caching** — SQLite-based local cache with configurable TTL
 - **Multi-level analysis** — Enterprise, organization, team, and individual user metrics
@@ -44,7 +48,7 @@ copilot-pulse/
 │   │   └── web_dashboard.py       # FastAPI dashboard + API endpoints
 │   ├── orgdata/                   # Org structure module
 │   │   ├── database.py            # SQLite org database
-│   │   ├── loader.py              # Excel/CSV import
+│   │   ├── loader.py              # Excel (.xls/.xlsx) / CSV import
 │   │   ├── models.py              # Employee model
 │   │   └── registry.py            # Org lookup helpers
 │   ├── cache/
@@ -154,9 +158,14 @@ copilot-pulse report --format csv --period 1d
 
 ### Import org structure
 
+Upload your org hierarchy file (`.xls` or `.xlsx`) via the **Setup** page in the web dashboard. The file is parsed and stored in a local SQLite database (`~/.copilot-pulse/orgdata.db`), which powers the org-level filters.
+
 ```bash
+# Or via CLI
 copilot-pulse import-org org-structure.xlsx
 ```
+
+Required columns: `github_id` (login), plus org level columns such as `sup_org_level_4` through `sup_org_level_8`.
 
 ### Cache management
 
@@ -169,43 +178,48 @@ copilot-pulse cache clear
 
 The web dashboard displays real-time Copilot usage analytics organized into KPI cards, interactive charts, and detail widgets. All data comes from the GitHub Copilot Usage Metrics API (GA) via NDJSON reports.
 
+### Org-Level Filtering
+
+When an org structure file has been imported, a filter bar appears at the top of the dashboard offering cascading dropdowns for **Level 4 → Level 5 → Level 6 → Level 7 → Level 8** of your org hierarchy.
+
+- Selecting values in the dropdowns **does not immediately fire API calls** — this avoids redundant requests while navigating the hierarchy.
+- The **Apply** button turns blue/highlighted when a pending selection differs from the currently applied filter. Click it once to refresh all dashboard metrics for the selected org scope.
+- The **Reset (✕)** button clears the filter and immediately refreshes to the full unfiltered view.
+
+All KPI cards, charts, adoption widgets, productivity insights, and ROI/FTE calculations respect the active org filter.
+
+### Export Snapshot
+
+The **Export Snapshot** button (top-right of the dashboard) generates a fully self-contained static HTML file of the current dashboard state:
+
+- All 7 Plotly charts are rendered as embedded PNG images
+- ROI and Virtual FTE parameters are captured as plain text values
+- No server connection required to view the exported file
+- File name includes the current date (e.g., `copilot-pulse-snapshot-2026-04-13.html`)
+
 ### KPI Cards
 
 Four headline metrics shown at the top of the dashboard:
 
 | KPI | Description | Source |
 |-----|-------------|--------|
-| **Active Users** | Users who had at least one Copilot interaction (completion, chat, or CLI) on the latest reported day | `total_active_users` from latest day in 28-day report |
-| **Engaged Users** | Users who used Copilot at least once in the rolling 28-day window | `total_engaged_users` from latest day |
+| **Active Users** | Unique users who had at least one Copilot interaction over the 28-day window | Unique `login` count across 28-day per-user report |
+| **Engaged Users** | Users with at least one accepted code suggestion over 28 days | Users with `code_acceptance_activity_count > 0` |
 | **Acceptance Rate** | Percentage of code suggestions that developers accepted | `total_code_acceptances / total_code_suggestions * 100` |
-| **Active Seats** | Total licensed Copilot seats in the organization | Seat management API |
+| **Active Seats** | Total licensed Copilot seats in the organization (or filtered group size) | Seat management API / filter set cardinality |
 
 ### Charts
 
 #### Adoption Trend (28 days)
 
-Dual-line chart tracking daily active users and engaged users over the 28-day reporting window. Shows whether adoption is growing, stable, or declining.
+Dual-line chart tracking daily active users and engaged users over the 28-day reporting window.
 
-- **Active Users line** (blue) — daily active count
-- **Engaged Users line** (green) — 28-day rolling active count
+- **Active Users line** (blue) — daily unique active count
+- **Engaged Users line** (green) — users with at least one accepted suggestion per day
 
-#### Feature Usage Distribution
+#### Feature Adoption (Unique Users)
 
-Donut chart showing how Copilot usage breaks down across all features. Each slice represents the total activity count over 28 days for a specific feature:
-
-| Feature | Metric Used |
-|---------|------------|
-| Code Completions | `code_generation_activity_count` |
-| Agent Mode | `user_initiated_interaction_count` |
-| Agent Edits | `code_generation_activity_count` |
-| Chat — Ask | `user_initiated_interaction_count` |
-| Chat — Custom | `user_initiated_interaction_count` |
-| Chat — Edit | `user_initiated_interaction_count` |
-| Chat — Plan | `user_initiated_interaction_count` |
-| Chat — Other | `user_initiated_interaction_count` |
-| Inline Chat | `user_initiated_interaction_count` |
-| Pull Requests | `pull_requests.total_created` |
-| CLI Sessions | `totals_by_cli.session_count` |
+Donut chart showing how many **unique users** engaged with each Copilot feature over 28 days. Each slice counts distinct developers — not raw event counts — so the chart reflects actual breadth of adoption per feature.
 
 Features with zero usage are automatically hidden.
 
@@ -221,17 +235,15 @@ Aggregated per user across all days in the reporting period.
 
 #### Suggested vs Accepted Code (14 days)
 
-Dual-area chart comparing the volume of code suggestions generated by Copilot against how many were accepted by developers, over the most recent 14 days. The gap between the two lines represents rejected or ignored suggestions.
+Dual-area chart comparing the volume of code suggestions generated by Copilot against how many were accepted by developers over the most recent 14 days.
 
 #### 28-Day Usage Trend (Composite Score)
 
-Single-line area chart showing a composite daily usage score that combines all Copilot interaction types:
+Single-line area chart showing a composite daily usage score:
 
 ```
 Usage Score = code_suggestions + ide_chats + dotcom_chats + PR_summaries + cli_chats
 ```
-
-Useful for spotting overall usage trends, weekday/weekend patterns, and the impact of events like holidays or policy changes.
 
 #### Agent Edits / User — Week over Week (13 weeks)
 
@@ -244,17 +256,15 @@ Bar chart showing the weekly ratio of autonomous agent edits per user, sampled e
 | 12.5 – 25 | 50 – 100 | Green | Advanced |
 | > 25 | > 100 | Blue | Agent-First |
 
-Reference lines on the chart mark each threshold. Data is fetched by querying the 1-day metrics endpoint for each Wednesday independently.
-
 ### ROI Calculator
 
-Interactive widget that estimates the economic return on Copilot investment over the 28-day period. All calculations happen client-side for instant feedback when parameters change.
+Interactive widget estimating the economic return on Copilot Agent investment over 28 days.
 
 **Adjustable parameters:**
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| Hourly Rate | 60 EUR | Average developer hourly cost |
+| Hourly Rate | 33 EUR/h | Average developer hourly cost |
 | License Cost | 39 EUR/mo | Copilot license cost per seat per month |
 | Minutes Saved Per Edit | 10 min | Estimated time saved per autonomous agent edit |
 | Human Review Overhead | 20% | Time spent reviewing AI-generated code |
@@ -272,17 +282,48 @@ Value Per Seat   = total_value / total_seats
 
 **Displayed KPIs:** ROI (28d) multiplier, Estimated Value, License Cost, Net Value, Value Per Seat, Total Agent Edits.
 
+### Virtual FTE Analysis
+
+Monthly table estimating the equivalent developer capacity that Copilot contributed, based on **both** IDE code completions and Agent Edits combined.
+
+**Adjustable parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| Human lines/day (baseline) | 50 | Average lines of code a developer writes per day |
+| Working days/month | 20 | Business days in the reference month |
+| Human review overhead | 20% | Fraction deducted for code review |
+| Developer hourly rate | 33 EUR/h | Average developer cost |
+| Daily work hours | 8 h | Hours per working day |
+| Lines per agent edit | 17 | Estimated lines of code per autonomous agent edit |
+
+**Formula:**
+
+```
+VOLUME_IDE   = lines_accepted_week * 7          (scaled from Wednesday sample)
+VOLUME_AGENT = agent_edits_week * 7 * lines_per_agent_edit
+TOTAL_LINES  = (VOLUME_IDE + VOLUME_AGENT) * (1 - review_overhead)
+
+Human Capacity = lines_per_day * working_days
+Virtual FTE    = TOTAL_LINES / Human Capacity
+Monthly Value  = Virtual_FTE * hourly_rate * daily_hours * working_days
+```
+
+The table shows one row per calendar month, with columns: Period, IDE Lines, Agent Lines, Total Lines (net), Human Capacity, Virtual FTE, Monthly Value.
+
+**Summary KPIs:** Monthly ROI of the latest period and average Virtual FTE over 13 weeks.
+
 ### CLI & Agent Adoption
 
 Five metric cards showing the depth of CLI and autonomous agent usage:
 
-| Metric | Description | Calculation |
-|--------|-------------|-------------|
-| **CLI Users** | Developers who used `gh copilot` on the latest day | `daily_active_cli_users` + percentage of total users |
-| **CLI Sessions** | Terminal sessions started with `gh copilot` over 28 days | Sum of `totals_by_cli.session_count` |
-| **Coding Agent Users** | Developers who used Copilot Agent for autonomous coding | `monthly_active_agent_users` (28-day rolling) + percentage |
-| **CLI Tokens** | Total tokens exchanged in CLI sessions (prompt + output) | Sum of `prompt_tokens_sum + output_tokens_sum` over 28 days |
-| **Agent Edits / User** | Average autonomous code edits per active user | `total_agent_edits / total_users` with color-coded scale |
+| Metric | Description |
+|--------|-------------|
+| **CLI Users** | Developers who used `gh copilot` on the latest day + % of total |
+| **CLI Sessions** | Terminal sessions with `gh copilot` over 28 days |
+| **Coding Agent Users** | Developers who used Copilot Agent (28-day rolling) + % |
+| **CLI Tokens** | Total tokens exchanged in CLI sessions over 28 days |
+| **Agent Edits / User** | Average autonomous code edits per active user (color-coded) |
 
 The Agent Edits / User card includes an interpretation scale:
 - **< 10** (Red) — Cautious / Legacy
@@ -292,15 +333,15 @@ The Agent Edits / User card includes an interpretation scale:
 
 ### Quick Insights
 
-Five auto-generated insight cards providing at-a-glance context:
+Five auto-generated insight cards:
 
 | Insight | Description |
 |---------|-------------|
-| **Top 5 Languages** | Most active programming languages by code generation activity, excluding "other"/"unknown" |
+| **Top 5 Languages** | Most active programming languages by code generation activity |
 | **Top IDE** | Most frequently used IDE across the reporting period |
-| **Acceptance Rate Trend** | Last 7 days acceptance rate with week-over-week delta (e.g., "67.3% ↑ 2.1pp") |
-| **Peak Day** | Day with the highest number of active users and the count |
-| **Seat Utilization** | Active seats vs total seats with utilization percentage |
+| **Acceptance Rate Trend** | Last 7 days acceptance rate with week-over-week delta |
+| **Peak Day** | Day with the highest active user count |
+| **Top 5 Models** | Most used Copilot models ranked by interaction count |
 
 ## How it works
 
@@ -338,7 +379,7 @@ Supports:
 
 ### Fallback: Legacy Copilot Metrics API
 
-Set `USE_LEGACY_API=true` in `.env`. Note: these endpoints are deprecated and scheduled for retirement on 2026-04-02.
+Set `USE_LEGACY_API=true` in `.env`. Note: these endpoints are deprecated and scheduled for retirement. The new Usage Metrics API is the recommended path.
 
 ## Running tests
 
@@ -353,6 +394,7 @@ All tests use JSON fixtures — no real API calls are made.
 - Metrics have a ~2 business day delay from actual activity
 - Team metrics require at least 5 members with active Copilot licenses
 - Telemetry must be enabled in the user's IDE for metrics to be collected
+- Org structure is stored at `~/.copilot-pulse/orgdata.db` (SQLite)
 - Export files are saved to `~/.copilot-pulse/exports/`
 - Chart images are saved to `~/.copilot-pulse/charts/`
 - Cache database is stored at `~/.copilot-pulse/cache.db`
