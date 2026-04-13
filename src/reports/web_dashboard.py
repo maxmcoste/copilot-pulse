@@ -617,19 +617,19 @@ def create_app(config: AppConfig) -> FastAPI:
                         f'<div class="kpi-card"><div class="kpi-value">0</div>'
                         f'<div class="kpi-label">{t.get("dash_active_users", "Active Users")}</div></div>'
                     )
-                unique_users = {r.get("user_login") for r in filtered if r.get("user_login")}
-                active = len(unique_users)
-                engaged_users: set[str] = set()
+                # Engaged = unique users across the full 28-day window
+                # Active  = unique users on the latest day only (single-day snapshot)
+                latest_date = max((r.get("date", "") for r in filtered), default="")
+                active = len({
+                    r.get("user_login") for r in filtered
+                    if r.get("user_login") and r.get("date") == latest_date
+                })
+                engaged = len({r.get("user_login") for r in filtered if r.get("user_login")})
                 sugg, acc = 0, 0
                 for rec in filtered:
-                    login = rec.get("user_login")
                     for feat in rec.get("totals_by_feature", []):
-                        feat_acc = feat.get("code_acceptance_activity_count", 0)
                         sugg += feat.get("code_generation_activity_count", 0)
-                        acc += feat_acc
-                        if feat_acc > 0 and login:
-                            engaged_users.add(login)
-                engaged = len(engaged_users)
+                        acc += feat.get("code_acceptance_activity_count", 0)
                 rate = f"{acc / sugg * 100:.1f}%" if sugg else "N/A"
                 seats_label = str(len(logins))
             except Exception as e:
@@ -655,18 +655,19 @@ def create_app(config: AppConfig) -> FastAPI:
                         f'<div class="kpi-card"><div class="kpi-value">0</div>'
                         f'<div class="kpi-label">{t.get("dash_active_users", "Active Users")}</div></div>'
                     )
-                engaged_users_all: set[str] = set()
+                # Engaged = unique users across the full 28-day window
+                # Active  = unique users on the latest day only (single-day snapshot)
+                latest_date = max((r.get("date", "") for r in user_records), default="")
+                active = len({
+                    r.get("user_login") for r in user_records
+                    if r.get("user_login") and r.get("date") == latest_date
+                })
+                engaged = len({r.get("user_login") for r in user_records if r.get("user_login")})
                 sugg, acc = 0, 0
                 for rec in user_records:
-                    login = rec.get("user_login")
                     for feat in rec.get("totals_by_feature", []):
-                        feat_acc = feat.get("code_acceptance_activity_count", 0)
                         sugg += feat.get("code_generation_activity_count", 0)
-                        acc += feat_acc
-                        if feat_acc > 0 and login:
-                            engaged_users_all.add(login)
-                active = len({r.get("user_login") for r in user_records if r.get("user_login")})
-                engaged = len(engaged_users_all)
+                        acc += feat.get("code_acceptance_activity_count", 0)
                 rate = f"{acc / sugg * 100:.1f}%" if sugg else "N/A"
                 seats_label = "N/A"
                 seat_result = await orch._tool_seat_info({"org": config.github_org})
