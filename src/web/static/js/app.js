@@ -1418,6 +1418,27 @@ function loadVirtualFTE() {
         });
 }
 
+// ── Inactive Users CSV download ──────────────────────────────
+
+function downloadInactiveUsers() {
+    var params = new URLSearchParams();
+    if (_appliedFilter && _appliedFilter.level) params.set('level', _appliedFilter.level);
+    if (_appliedFilter && _appliedFilter.value) params.set('value', _appliedFilter.value);
+    var btn = document.getElementById('inactiveUsersBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '…'; }
+    var url = '/api/inactive-users/csv' + (params.toString() ? '?' + params.toString() : '');
+    // Use a hidden anchor so the browser triggers a file download
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function() {
+        if (btn) { btn.disabled = false; btn.innerHTML = '&#x2913; ' + (window.T && window.T.inactive_users_csv || 'Inactive Users'); }
+    }, 2000);
+}
+
 // ── Export Snapshot ─────────────────────────────────────────
 
 async function exportSnapshot() {

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
 import logging
 import shutil
@@ -13,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
@@ -1549,6 +1551,142 @@ def create_app(config: AppConfig) -> FastAPI:
         except Exception as e:
             logger.error("API seat info error: %s", e)
             return {"error": str(e)}
+
+    @app.get("/api/inactive-users/csv")
+    async def api_inactive_users_csv(request: Request):
+        """Download a CSV of seat holders inactive in the past 14 days.
+
+        Joins three sources:
+        - Seat API  — full seat list (catches zero-activity users)
+        - 28-day user metrics (cached) — last-seen date + activity stats
+        - OrgDatabase — full org structure per user (github_id lookup)
+
+        Respects the active org filter (level/value query params).
+        """
+        from datetime import date as _date, timedelta as _td, datetime as _dt
+
+        orch = app.state.orchestrator
+        if not orch:
+            return JSONResponse({"error": "Orchestrator not initialized"}, status_code=503)
+
+        try:
+            # ── 1. Seat list ──────────────────────────────────────────
+            seat_result = await orch._tool_seat_info({"org": config.github_org})
+            seats: list[dict[str, Any]] = seat_result.get("seat_info", {}).get("seats", [])
+
+            # ── 2. 28-day user metrics (cached) ───────────────────────
+            user_records = await _get_raw_user_metrics()
+            org_records = await _get_raw_org_metrics()
+            latest_date_str = max(
+                (r.get("date") or r.get("day", "") for r in org_records), default=""
+            )
+            if latest_date_str:
+                latest_date = _date.fromisoformat(latest_date_str)
+                cutoff = latest_date - _td(days=13)   # last 14 days inclusive
+            else:
+                cutoff = _date.today() - _td(days=14)
+
+            # logins active in last 14 days
+            active_last_14: set[str] = set()
+            last_seen: dict[str, str] = {}
+            suggestions_28: dict[str, int] = {}
+            acceptances_28: dict[str, int] = {}
+
+            for rec in user_records:
+                login = (rec.get("user_login") or "").lower()
+                if not login:
+                    continue
+                day_str = rec.get("date") or rec.get("day", "")
+                if day_str:
+                    if day_str > last_seen.get(login, ""):
+                        last_seen[login] = day_str
+                    try:
+                        if _date.fromisoformat(day_str) >= cutoff:
+                            active_last_14.add(login)
+                    except ValueError:
+                        pass
+                for feat in rec.get("totals_by_feature", []):
+                    suggestions_28[login] = suggestions_28.get(login, 0) + feat.get("code_generation_activity_count", 0)
+                    acceptances_28[login] = acceptances_28.get(login, 0) + feat.get("code_acceptance_activity_count", 0)
+
+            # ── 3. Org filter ─────────────────────────────────────────
+            level, value = _parse_filter(request)
+            filter_logins: set[str] | None = _filter_logins(level, value) if level and value else None
+
+            # ── 4. Build inactive list ────────────────────────────────
+            inactive_seats = [
+                s for s in seats
+                if (s.get("login") or "").lower() not in active_last_14
+                and (filter_logins is None or (s.get("login") or "").lower() in filter_logins)
+            ]
+
+            # ── 5. OrgDB lookup ───────────────────────────────────────
+            db = _get_orgdb()
+            def _org_row(login: str) -> dict[str, str]:
+                try:
+                    row = db._conn.execute(
+                        "SELECT name, surname, email, business_title, job_family, "
+                        "location, location_country, is_manager, "
+                        "sup_org_level_4, sup_org_level_5, sup_org_level_6, "
+                        "sup_org_level_7, sup_org_level_8, "
+                        "hr_business_partner, cost_center_id "
+                        "FROM employees WHERE LOWER(github_id) = ?",
+                        (login.lower(),)
+                    ).fetchone()
+                    if row:
+                        keys = ["name", "surname", "email", "business_title", "job_family",
+                                "location", "location_country", "is_manager",
+                                "sup_org_level_4", "sup_org_level_5", "sup_org_level_6",
+                                "sup_org_level_7", "sup_org_level_8",
+                                "hr_business_partner", "cost_center_id"]
+                        return {k: ("" if v is None else str(v)) for k, v in zip(keys, row)}
+                except Exception:
+                    pass
+                return {}
+
+            # ── 6. Build CSV ──────────────────────────────────────────
+            headers = [
+                "github_login", "last_activity_at", "last_activity_editor", "assigned_at",
+                "last_seen_in_metrics", "suggestions_28d", "acceptances_28d", "acceptance_rate_28d",
+                "name", "surname", "email", "business_title", "job_family",
+                "location", "location_country", "is_manager",
+                "sup_org_level_4", "sup_org_level_5", "sup_org_level_6",
+                "sup_org_level_7", "sup_org_level_8",
+                "hr_business_partner", "cost_center_id",
+            ]
+
+            buf = io.StringIO()
+            writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
+            writer.writeheader()
+
+            for seat in sorted(inactive_seats, key=lambda s: (s.get("login") or "").lower()):
+                login = (seat.get("login") or "").lower()
+                sugg = suggestions_28.get(login, 0)
+                acc = acceptances_28.get(login, 0)
+                rate = f"{acc / sugg * 100:.1f}%" if sugg else ""
+                org = _org_row(login)
+                writer.writerow({
+                    "github_login": seat.get("login", ""),
+                    "last_activity_at": seat.get("last_activity_at") or "",
+                    "last_activity_editor": seat.get("last_activity_editor") or "",
+                    "assigned_at": seat.get("assigned_at") or "",
+                    "last_seen_in_metrics": last_seen.get(login, ""),
+                    "suggestions_28d": sugg,
+                    "acceptances_28d": acc,
+                    "acceptance_rate_28d": rate,
+                    **org,
+                })
+
+            filename = f"inactive-users-{_date.today().isoformat()}.csv"
+            return StreamingResponse(
+                iter([buf.getvalue()]),
+                media_type="text/csv; charset=utf-8",
+                headers={"Content-Disposition": f"attachment; filename={filename}"},
+            )
+
+        except Exception as e:
+            logger.error("Inactive users CSV error: %s", e)
+            return JSONResponse({"error": str(e)}, status_code=500)
 
     # ------------------------------------------------------------------
     # Setup page — org structure import & GitHub ID mapping

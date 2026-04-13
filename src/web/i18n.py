@@ -6,6 +6,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     # ── Navbar ───────────────────────────────────────────────
     "nav_dashboard": {"en": "Dashboard", "it": "Dashboard"},
     "export_snapshot": {"en": "Export Snapshot", "it": "Esporta Snapshot"},
+    "inactive_users_csv": {"en": "Inactive Users (14d)", "it": "Utenti inattivi (14g)"},
     "filter_apply": {"en": "Apply", "it": "Applica"},
     "nav_chat": {"en": "Chat", "it": "Chat"},
     "nav_setup": {"en": "Setup", "it": "Setup"},

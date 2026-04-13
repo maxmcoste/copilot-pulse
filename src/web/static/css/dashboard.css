@@ -160,6 +160,28 @@ body {
     cursor: not-allowed;
 }
 
+.btn-inactive-users {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.btn-inactive-users:hover {
+    color: #f59e0b;
+    border-color: #f59e0b;
+}
+
+.btn-inactive-users:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .dashboard-header h1 {
     font-size: 24px;
     font-weight: 600;
