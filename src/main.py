@@ -72,7 +72,7 @@ def dashboard(host: str, port: int | None) -> None:
     port = port or config.web_port
 
     # ── Redirect all logging to a file so the terminal stays clean ──
-    log_dir = Path.home() / ".copilot-pulse"
+    log_dir = Path(__file__).resolve().parent.parent / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "dashboard.log"
 
