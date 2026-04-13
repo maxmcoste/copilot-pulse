@@ -31,9 +31,16 @@ from ..web.i18n import get_translations
 
 logger = logging.getLogger(__name__)
 
+# Cache TTLs (seconds).
+# GitHub metrics have a ~2 business day lag so short TTLs only cause redundant calls.
+_TTL_28D = 1800       # 30 min — 28-day org/user report
+_TTL_WEEKLY = 3600    # 60 min — historical Wednesday snapshots never change once written
+_TTL_SEATS = 1800     # 30 min — seat assignments change rarely
+
 # In-memory cache for raw 28-day records (avoids re-fetching per chart).
 _raw_cache: dict[str, Any] = {"data": None, "ts": 0.0}
 _user_cache: dict[str, Any] = {"data": None, "ts": 0.0}
+_seat_cache: dict[str, Any] = {"data": None, "ts": 0.0}
 
 # Temporary upload sessions for the two-step org import flow.
 # Maps session_id → {"path": str, "created_at": float}
@@ -246,9 +253,9 @@ def create_app(config: AppConfig) -> FastAPI:
     # ── Data fetching with caching ──────────────────────────────
 
     async def _get_raw_org_metrics() -> list[dict[str, Any]]:
-        """Fetch raw (unparsed) 28-day org metrics with simple caching (5 min)."""
+        """Fetch raw (unparsed) 28-day org metrics with caching."""
         now = _time.time()
-        if _raw_cache["data"] is not None and now - _raw_cache["ts"] < 300:
+        if _raw_cache["data"] is not None and now - _raw_cache["ts"] < _TTL_28D:
             return _raw_cache["data"]
 
         auth = build_github_auth(config)
@@ -269,9 +276,9 @@ def create_app(config: AppConfig) -> FastAPI:
             await client.close()
 
     async def _get_raw_user_metrics() -> list[dict[str, Any]]:
-        """Fetch raw per-user 28-day metrics with simple caching (5 min)."""
+        """Fetch raw per-user 28-day metrics with caching."""
         now = _time.time()
-        if _user_cache["data"] is not None and now - _user_cache["ts"] < 300:
+        if _user_cache["data"] is not None and now - _user_cache["ts"] < _TTL_28D:
             return _user_cache["data"]
 
         auth = build_github_auth(config)
@@ -327,13 +334,20 @@ def create_app(config: AppConfig) -> FastAPI:
                 return len(_filter_logins(level, value))
             return 0
 
+        now = _time.time()
+        if _seat_cache["data"] is not None and now - _seat_cache["ts"] < _TTL_SEATS:
+            return _seat_cache["data"]
+
         orch = app.state.orchestrator
         if not orch:
             return 0
         try:
             seat_result = await orch._tool_seat_info({"org": config.github_org})
             seat_info = seat_result.get("seat_info", {})
-            return seat_info.get("total_seats", 0) or 0
+            total = seat_info.get("total_seats", 0) or 0
+            _seat_cache["data"] = total
+            _seat_cache["ts"] = now
+            return total
         except Exception:
             return 0
 
@@ -347,6 +361,9 @@ def create_app(config: AppConfig) -> FastAPI:
         return [last_wed - _td(weeks=i) for i in range(12, -1, -1)]
 
     _weekly_agent_cache: dict[str, dict[str, Any]] = {}
+    # Per-key locks prevent multiple concurrent callers (e.g. 4 chart endpoints firing in
+    # parallel on a cold cache) from each independently kicking off 13 API calls.
+    _weekly_agent_locks: dict[str, asyncio.Lock] = {}
 
     async def _get_weekly_agent_series(request: Request) -> dict[str, Any]:
         """Fetch weekly agent-edit samples shared by multiple dashboard charts."""
@@ -354,110 +371,119 @@ def create_app(config: AppConfig) -> FastAPI:
         cache_key = f"{level}:{value}" if level and value else "__all__"
         now = _time.time()
         cached = _weekly_agent_cache.get(cache_key)
-        if cached and now - cached["ts"] < 300:
+        if cached and now - cached["ts"] < _TTL_WEEKLY:
             return cached["data"]
 
-        filter_logins = _filter_logins(level, value) if level and value else None
-        if filter_logins is not None and not filter_logins:
+        # Only one coroutine per cache key may run the 13 API calls at a time.
+        if cache_key not in _weekly_agent_locks:
+            _weekly_agent_locks[cache_key] = asyncio.Lock()
+        async with _weekly_agent_locks[cache_key]:
+            # Re-check after acquiring lock — another waiter may have populated it.
+            cached = _weekly_agent_cache.get(cache_key)
+            if cached and now - cached["ts"] < _TTL_WEEKLY:
+                return cached["data"]
+
+            filter_logins = _filter_logins(level, value) if level and value else None
+            if filter_logins is not None and not filter_logins:
+                weeks = _weekly_reference_dates()
+                empty = {
+                    "labels": [f"W{w.isocalendar()[1]} ({w.strftime('%d/%m')})" for w in weeks],
+                    "agent_edits": [0 for _ in weeks],
+                    "active_users": [0 for _ in weeks],
+                    "ratios": [0.0 for _ in weeks],
+                }
+                _weekly_agent_cache[cache_key] = {"data": empty, "ts": now}
+                return empty
+
+            use_user_endpoint = filter_logins is not None
+            auth = build_github_auth(config)
+            client = GitHubBaseClient(auth)
             weeks = _weekly_reference_dates()
-            empty = {
-                "labels": [f"W{w.isocalendar()[1]} ({w.strftime('%d/%m')})" for w in weeks],
-                "agent_edits": [0 for _ in weeks],
-                "active_users": [0 for _ in weeks],
-                "ratios": [0.0 for _ in weeks],
-            }
-            _weekly_agent_cache[cache_key] = {"data": empty, "ts": now}
-            return empty
 
-        use_user_endpoint = filter_logins is not None
-        auth = build_github_auth(config)
-        client = GitHubBaseClient(auth)
-        weeks = _weekly_reference_dates()
-
-        async def _fetch_day(day_str: str) -> list[dict[str, Any]] | dict[str, Any] | None:
-            try:
-                endpoint = (
-                    f"/orgs/{config.github_org}/copilot/metrics/reports/users-1-day"
-                    if use_user_endpoint
-                    else f"/orgs/{config.github_org}/copilot/metrics/reports/organization-1-day"
-                )
-                resp = await client.get(endpoint, params={"day": day_str})
-                dr = ReportDownloadResponse(**resp.json())
-                if not dr.download_links:
+            async def _fetch_day(day_str: str) -> list[dict[str, Any]] | dict[str, Any] | None:
+                try:
+                    endpoint = (
+                        f"/orgs/{config.github_org}/copilot/metrics/reports/users-1-day"
+                        if use_user_endpoint
+                        else f"/orgs/{config.github_org}/copilot/metrics/reports/organization-1-day"
+                    )
+                    resp = await client.get(endpoint, params={"day": day_str})
+                    dr = ReportDownloadResponse(**resp.json())
+                    if not dr.download_links:
+                        return None
+                    raw = await client.download_ndjson(dr.download_links[0])
+                    recs = _unwrap_day_totals(raw)
+                    if use_user_endpoint:
+                        return recs
+                    return recs[0] if recs else None
+                except Exception as exc:
+                    logger.warning("weekly agent series: failed to fetch %s: %s", day_str, exc)
                     return None
-                raw = await client.download_ndjson(dr.download_links[0])
-                recs = _unwrap_day_totals(raw)
-                if use_user_endpoint:
-                    return recs
-                return recs[0] if recs else None
-            except Exception as exc:
-                logger.warning("weekly agent series: failed to fetch %s: %s", day_str, exc)
-                return None
 
-        try:
-            results = await asyncio.gather(*[_fetch_day(w.isoformat()) for w in weeks])
+            try:
+                results = await asyncio.gather(*[_fetch_day(w.isoformat()) for w in weeks])
 
-            labels: list[str] = []
-            agent_edits_values: list[int] = []
-            active_users_values: list[int] = []
-            ratio_values: list[float] = []
-            lines_accepted_values: list[int] = []
+                labels: list[str] = []
+                agent_edits_values: list[int] = []
+                active_users_values: list[int] = []
+                ratio_values: list[float] = []
+                lines_accepted_values: list[int] = []
 
-            for week_date, result in zip(weeks, results):
-                labels.append(f"W{week_date.isocalendar()[1]} ({week_date.strftime('%d/%m')})")
-                if result is None:
-                    agent_edits_values.append(0)
-                    active_users_values.append(0)
-                    ratio_values.append(0.0)
-                    lines_accepted_values.append(0)
-                    continue
+                for week_date, result in zip(weeks, results):
+                    labels.append(f"W{week_date.isocalendar()[1]} ({week_date.strftime('%d/%m')})")
+                    if result is None:
+                        agent_edits_values.append(0)
+                        active_users_values.append(0)
+                        ratio_values.append(0.0)
+                        lines_accepted_values.append(0)
+                        continue
 
-                if use_user_endpoint:
-                    filtered = [
-                        r for r in result
-                        if r.get("user_login", "").lower() in filter_logins
-                    ]
-                    agent_edits = _sum_agent_edits(filtered)
-                    active_users = len({
-                        r.get("user_login") for r in filtered if r.get("user_login")
-                    })
-                    lines_accepted = sum(
-                        feat.get("lines_accepted", 0) or feat.get("code_acceptance_activity_count", 0)
-                        for r in filtered
-                        for feat in r.get("totals_by_feature", [])
-                        if feat.get("feature") == "code_completion"
-                    )
-                else:
-                    rec = result
-                    agent_edits = _sum_agent_edits([rec])
-                    active_users = (
-                        rec.get("monthly_active_users")
-                        or rec.get("total_engaged_users")
-                        or rec.get("total_active_users")
-                        or 0
-                    )
-                    comp = rec.get("copilot_ide_code_completions") or {}
-                    lines_accepted = (
-                        comp.get("total_lines_accepted", 0)
-                        or comp.get("total_code_acceptances", 0)
-                    )
+                    if use_user_endpoint:
+                        filtered = [
+                            r for r in result
+                            if r.get("user_login", "").lower() in filter_logins
+                        ]
+                        agent_edits = _sum_agent_edits(filtered)
+                        active_users = len({
+                            r.get("user_login") for r in filtered if r.get("user_login")
+                        })
+                        lines_accepted = sum(
+                            feat.get("lines_accepted", 0) or feat.get("code_acceptance_activity_count", 0)
+                            for r in filtered
+                            for feat in r.get("totals_by_feature", [])
+                            if feat.get("feature") == "code_completion"
+                        )
+                    else:
+                        rec = result
+                        agent_edits = _sum_agent_edits([rec])
+                        active_users = (
+                            rec.get("monthly_active_users")
+                            or rec.get("total_engaged_users")
+                            or rec.get("total_active_users")
+                            or 0
+                        )
+                        comp = rec.get("copilot_ide_code_completions") or {}
+                        lines_accepted = (
+                            comp.get("total_lines_accepted", 0)
+                            or comp.get("total_code_acceptances", 0)
+                        )
 
-                agent_edits_values.append(agent_edits)
-                active_users_values.append(active_users)
-                ratio_values.append(round(agent_edits / active_users, 1) if active_users else 0.0)
-                lines_accepted_values.append(lines_accepted)
+                    agent_edits_values.append(agent_edits)
+                    active_users_values.append(active_users)
+                    ratio_values.append(round(agent_edits / active_users, 1) if active_users else 0.0)
+                    lines_accepted_values.append(lines_accepted)
 
-            data = {
-                "labels": labels,
-                "agent_edits": agent_edits_values,
-                "active_users": active_users_values,
-                "ratios": ratio_values,
-                "lines_accepted": lines_accepted_values,
-            }
-            _weekly_agent_cache[cache_key] = {"data": data, "ts": now}
-            return data
-        finally:
-            await client.close()
+                data = {
+                    "labels": labels,
+                    "agent_edits": agent_edits_values,
+                    "active_users": active_users_values,
+                    "ratios": ratio_values,
+                    "lines_accepted": lines_accepted_values,
+                }
+                _weekly_agent_cache[cache_key] = {"data": data, "ts": now}
+                return data
+            finally:
+                await client.close()
 
     async def _get_weekly_agent_ratio_payload(request: Request) -> dict[str, Any]:
         """Return weekly Agent Edits / Active User values with dynamically scaled thresholds."""
@@ -1884,5 +1910,28 @@ def create_app(config: AppConfig) -> FastAPI:
         except WebSocketDisconnect:
             orch._log_callback = None
             logger.info("WebSocket client disconnected")
+
+    @app.on_event("startup")
+    async def _prewarm_caches() -> None:
+        """Pre-warm the weekly agent series cache in the background on startup.
+
+        This fires the 13 API calls once at startup so the first real user
+        request hits a warm cache instead of experiencing a multi-second delay.
+        The task runs in the background and never blocks server startup.
+        """
+        async def _warm() -> None:
+            try:
+                from starlette.datastructures import QueryParams
+
+                class _StubRequest:
+                    """Minimal stand-in for a Starlette Request with no query params."""
+                    query_params = QueryParams("")
+
+                await _get_weekly_agent_series(_StubRequest())  # type: ignore[arg-type]
+                logger.info("Cache pre-warm: weekly agent series ready")
+            except Exception as exc:
+                logger.warning("Cache pre-warm failed (non-fatal): %s", exc)
+
+        asyncio.create_task(_warm())
 
     return app
