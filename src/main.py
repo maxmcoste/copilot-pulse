@@ -76,7 +76,10 @@ def dashboard(host: str, port: int | None) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "dashboard.log"
 
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    from logging.handlers import RotatingFileHandler
+    file_handler = RotatingFileHandler(
+        log_file, maxBytes=1_000_000, backupCount=1, encoding="utf-8"
+    )
     file_handler.setFormatter(
         logging.Formatter(
             "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
