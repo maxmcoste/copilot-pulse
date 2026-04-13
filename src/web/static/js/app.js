@@ -1426,7 +1426,7 @@ function downloadInactiveUsers() {
     if (_appliedFilter && _appliedFilter.value) params.set('value', _appliedFilter.value);
     var btn = document.getElementById('inactiveUsersBtn');
     if (btn) { btn.disabled = true; btn.textContent = '…'; }
-    var url = '/api/inactive-users/csv' + (params.toString() ? '?' + params.toString() : '');
+    var url = '/api/inactive-users/xlsx' + (params.toString() ? '?' + params.toString() : '');
     // Use a hidden anchor so the browser triggers a file download
     var a = document.createElement('a');
     a.href = url;

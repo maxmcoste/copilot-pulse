@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import csv
 import io
 import json
 import logging
@@ -1552,7 +1551,7 @@ def create_app(config: AppConfig) -> FastAPI:
             logger.error("API seat info error: %s", e)
             return {"error": str(e)}
 
-    @app.get("/api/inactive-users/csv")
+    @app.get("/api/inactive-users/xlsx")
     async def api_inactive_users_csv(request: Request):
         """Download a CSV of seat holders inactive in the past 14 days.
 
@@ -1655,37 +1654,78 @@ def create_app(config: AppConfig) -> FastAPI:
                 "hr_business_partner", "cost_center_id",
             ]
 
-            buf = io.StringIO()
-            writer = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
-            writer.writeheader()
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment
 
-            for seat in sorted(inactive_seats, key=lambda s: (s.get("login") or "").lower()):
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Inactive Users"
+
+            # Header row — blue background, white bold text
+            header_font = Font(bold=True, color="FFFFFF")
+            header_fill = PatternFill("solid", fgColor="2563EB")
+            for col_idx, h in enumerate(headers, start=1):
+                cell = ws.cell(row=1, column=col_idx, value=h)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center")
+
+            # Data rows
+            for row_idx, seat in enumerate(
+                sorted(inactive_seats, key=lambda s: (s.get("login") or "").lower()),
+                start=2,
+            ):
                 login = (seat.get("login") or "").lower()
                 sugg = suggestions_28.get(login, 0)
                 acc = acceptances_28.get(login, 0)
                 rate = f"{acc / sugg * 100:.1f}%" if sugg else ""
                 org = _org_row(login)
-                writer.writerow({
-                    "github_login": seat.get("login", ""),
-                    "last_activity_at": seat.get("last_activity_at") or "",
-                    "last_activity_editor": seat.get("last_activity_editor") or "",
-                    "assigned_at": seat.get("assigned_at") or "",
-                    "last_seen_in_metrics": last_seen.get(login, ""),
-                    "suggestions_28d": sugg,
-                    "acceptances_28d": acc,
-                    "acceptance_rate_28d": rate,
-                    **org,
-                })
+                row_values = [
+                    seat.get("login", ""),
+                    seat.get("last_activity_at") or "",
+                    seat.get("last_activity_editor") or "",
+                    seat.get("assigned_at") or "",
+                    last_seen.get(login, ""),
+                    sugg,
+                    acc,
+                    rate,
+                    org.get("name", ""),
+                    org.get("surname", ""),
+                    org.get("email", ""),
+                    org.get("business_title", ""),
+                    org.get("job_family", ""),
+                    org.get("location", ""),
+                    org.get("location_country", ""),
+                    org.get("is_manager", ""),
+                    org.get("sup_org_level_4", ""),
+                    org.get("sup_org_level_5", ""),
+                    org.get("sup_org_level_6", ""),
+                    org.get("sup_org_level_7", ""),
+                    org.get("sup_org_level_8", ""),
+                    org.get("hr_business_partner", ""),
+                    org.get("cost_center_id", ""),
+                ]
+                for col_idx, val in enumerate(row_values, start=1):
+                    ws.cell(row=row_idx, column=col_idx, value=val)
 
-            filename = f"inactive-users-{_date.today().isoformat()}.csv"
+            # Auto-size columns
+            for col in ws.columns:
+                max_len = max((len(str(c.value or "")) for c in col), default=0)
+                ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 40)
+
+            buf = io.BytesIO()
+            wb.save(buf)
+            buf.seek(0)
+
+            filename = f"inactive-users-{_date.today().isoformat()}.xlsx"
             return StreamingResponse(
-                iter([buf.getvalue()]),
-                media_type="text/csv; charset=utf-8",
+                buf,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 headers={"Content-Disposition": f"attachment; filename={filename}"},
             )
 
         except Exception as e:
-            logger.error("Inactive users CSV error: %s", e)
+            logger.error("Inactive users XLSX error: %s", e)
             return JSONResponse({"error": str(e)}, status_code=500)
 
     # ------------------------------------------------------------------
