@@ -23,6 +23,7 @@
         <div>
             <h1>{{ t.dash_title }}</h1>
             <p class="subtitle">Enterprise: {{ enterprise or 'N/A' }} · Org: {{ org or 'N/A' }}</p>
+            <div id="dataAsOf" hx-get="/api/data-as-of" hx-trigger="load" hx-swap="innerHTML"></div>
         </div>
         <div class="dashboard-header-right">
             {% if has_org_filters %}

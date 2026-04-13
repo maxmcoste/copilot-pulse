@@ -582,6 +582,25 @@ def create_app(config: AppConfig) -> FastAPI:
             },
         }
 
+    @app.get("/api/data-as-of", response_class=HTMLResponse)
+    async def api_data_as_of(request: Request):
+        """Return an HTML badge showing the most recent date with actual data."""
+        lang = _lang(request)
+        t = get_translations(lang)
+        try:
+            org_records = await _get_raw_org_metrics()
+            latest = max(
+                (r.get("date") or r.get("day", "") for r in org_records), default=""
+            )
+            if latest:
+                label = t.get("dash_data_as_of", "Data as of")
+                return HTMLResponse(
+                    f'<span class="data-as-of-badge">{label}: <strong>{latest}</strong></span>'
+                )
+        except Exception:
+            pass
+        return HTMLResponse("")
+
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request):
         """Main dashboard page with KPI cards and charts."""

@@ -57,6 +57,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
 
     # ── Dashboard ────────────────────────────────────────────
     "dash_title": {"en": "Copilot Usage Dashboard", "it": "Copilot Usage Dashboard"},
+    "dash_data_as_of": {"en": "Data as of", "it": "Dati aggiornati al"},
     "dash_active_users": {"en": "Active Users", "it": "Utenti attivi"},
     "dash_engaged_users": {"en": "Engaged Users", "it": "Utenti coinvolti"},
     "dash_acceptance_rate": {"en": "Acceptance Rate", "it": "Acceptance Rate"},
