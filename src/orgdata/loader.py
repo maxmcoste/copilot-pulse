@@ -1,7 +1,8 @@
-"""Load organizational structure data from Excel files."""
+"""Load organizational structure data from Excel and CSV files."""
 
 from __future__ import annotations
 
+import csv
 import logging
 from datetime import date, datetime
 from pathlib import Path
@@ -133,8 +134,23 @@ def _safe_float(val: Any) -> float:
 
 
 def _read_all_rows(file_path: Path) -> list[tuple]:
-    """Read all rows from an .xlsx or legacy .xls file."""
-    if file_path.suffix.lower() == ".xls":
+    """Read all rows from an .xlsx, legacy .xls, or .csv file."""
+    suffix = file_path.suffix.lower()
+    if suffix == ".csv":
+        rows: list[tuple] = []
+        # Try UTF-8 first, fall back to latin-1 for files exported from Excel
+        for encoding in ("utf-8-sig", "utf-8", "latin-1"):
+            try:
+                with open(file_path, newline="", encoding=encoding) as fh:
+                    reader = csv.reader(fh)
+                    for row in reader:
+                        rows.append(tuple(v.strip() if v else None for v in row))
+                return rows
+            except UnicodeDecodeError:
+                rows = []
+                continue
+        raise ValueError(f"Cannot decode CSV file {file_path.name}. Try saving as UTF-8.")
+    elif suffix == ".xls":
         if not _XLRD_AVAILABLE:
             raise ImportError(
                 "The 'xlrd' package is required to read legacy .xls files. "
@@ -142,7 +158,7 @@ def _read_all_rows(file_path: Path) -> list[tuple]:
             )
         wb = xlrd.open_workbook(str(file_path))
         ws = wb.sheet_by_name("Data") if "Data" in wb.sheet_names() else wb.sheet_by_index(0)
-        rows: list[tuple] = []
+        rows = []
         for i in range(ws.nrows):
             row_vals: list[Any] = []
             for j in range(ws.ncols):

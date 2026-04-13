@@ -244,10 +244,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "import_title": {"en": "1. Import org structure", "it": "1. Importa struttura organizzativa"},
     "import_employees": {"en": "employees", "it": "dipendenti"},
     "import_desc": {
-        "en": "Upload the Excel file (.xlsx) with the org structure. It will be imported into the local SQLite database.",
-        "it": "Carica il file Excel (.xlsx) con la struttura organizzativa. Il file verra' letto e importato nel database SQLite locale.",
+        "en": "Upload the org structure file (.xlsx, .xls or .csv). It will be imported into the local SQLite database.",
+        "it": "Carica il file con la struttura organizzativa (.xlsx, .xls o .csv). Il file verra' letto e importato nel database SQLite locale.",
     },
-    "import_drag": {"en": "Drag the Excel file here or", "it": "Trascina il file Excel qui oppure"},
+    "import_drag": {"en": "Drag the file (.xlsx, .xls, .csv) here or", "it": "Trascina il file (.xlsx, .xls, .csv) qui oppure"},
     "import_choose": {"en": "Choose file", "it": "Scegli file"},
     "import_uploading": {"en": "Uploading file...", "it": "Caricamento file..."},
     "import_importing": {"en": "Importing...", "it": "Importazione in corso..."},

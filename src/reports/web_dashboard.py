@@ -1629,8 +1629,8 @@ def create_app(config: AppConfig) -> FastAPI:
         - sample_rows: first 10 data rows
         - missing_required: required field names absent from the file
         """
-        if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
-            return JSONResponse({"error": "Il file deve essere in formato .xlsx"}, status_code=400)
+        if not file.filename or not file.filename.endswith((".xlsx", ".xls", ".csv")):
+            return JSONResponse({"error": "Il file deve essere in formato .xlsx, .xls o .csv"}, status_code=400)
 
         _cleanup_upload_sessions()
 
