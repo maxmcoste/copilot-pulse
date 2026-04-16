@@ -5,12 +5,36 @@ from __future__ import annotations
 TRANSLATIONS: dict[str, dict[str, str]] = {
     # ── Navbar ───────────────────────────────────────────────
     "nav_dashboard": {"en": "Dashboard", "it": "Dashboard"},
+    "nav_maturity":  {"en": "Radar",     "it": "Radar"},
     "export_snapshot": {"en": "Export Snapshot", "it": "Esporta Snapshot"},
     "inactive_users_csv": {"en": "Inactive Users (14d)", "it": "Utenti inattivi (14g)"},
+    "inactive_users_28d_csv": {"en": "Inactive Users (28d)", "it": "Utenti inattivi (28g)"},
     "filter_apply": {"en": "Apply", "it": "Applica"},
     "nav_chat": {"en": "Chat", "it": "Chat"},
     "nav_setup": {"en": "Setup", "it": "Setup"},
     "nav_settings": {"en": "Settings", "it": "Impostazioni"},
+
+    # ── Maturity Radar page ──────────────────────────────────
+    "maturity_title":           {"en": "AI Maturity Radar",   "it": "AI Maturity Radar"},
+    "maturity_subtitle":        {"en": "Developer segmentation by AI adoption level (last 28 days)",
+                                 "it": "Segmentazione sviluppatori per livello di adozione AI (ultimi 28 giorni)"},
+    "maturity_skill_gap":       {"en": "Skill Gap Index",     "it": "Skill Gap Index"},
+    "maturity_skill_gap_desc":  {"en": "% users at L1–L2 needing upskilling",
+                                 "it": "% utenti L1–L2 da formare"},
+    "maturity_champions":       {"en": "Champion Density",    "it": "Champion Density"},
+    "maturity_champions_desc":  {"en": "% Elite Agentic users (L5)",
+                                 "it": "% utenti Elite Agentici (L5)"},
+    "maturity_pyramid_title":   {"en": "Adoption Pyramid",    "it": "Piramide di Adozione"},
+    "maturity_trend_title":     {"en": "Maturity Trend (4 weeks)", "it": "Trend Maturità (13 settimane)"},
+    "maturity_leaderboard":     {"en": "Agentic Champions — Top 10", "it": "Campioni Agentici — Top 10"},
+    "maturity_filter_active":   {"en": "Active Users",        "it": "Utenti Attivi"},
+    "maturity_filter_licensed": {"en": "Licensed Users",      "it": "Licenze Totali"},
+    "maturity_col_rank":        {"en": "#",                   "it": "#"},
+    "maturity_col_login":       {"en": "Developer",           "it": "Sviluppatore"},
+    "maturity_col_level":       {"en": "Level",               "it": "Livello"},
+    "maturity_col_agent":       {"en": "Agent Turns",         "it": "Agent Turns"},
+    "maturity_col_cli":         {"en": "CLI Turns",           "it": "CLI Turns"},
+    "maturity_col_days":        {"en": "Active Days",         "it": "Giorni Attivi"},
 
     # ── Settings page ────────────────────────────────────────
     "settings_title": {"en": "LLM Settings", "it": "Impostazioni LLM"},

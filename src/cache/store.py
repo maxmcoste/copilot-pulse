@@ -80,6 +80,24 @@ class CacheStore:
         self._conn.commit()
         logger.debug("Cached key: %s", key)
 
+    def delete_prefix(self, prefix: str) -> int:
+        """Remove all cache entries whose key starts with *prefix*.
+
+        Args:
+            prefix: Key prefix to match (e.g. ``"maturity:"``).
+
+        Returns:
+            Number of entries removed.
+        """
+        cursor = self._conn.execute(
+            "SELECT COUNT(*) FROM cache WHERE key LIKE ?", (prefix + "%",)
+        )
+        count = cursor.fetchone()[0]
+        self._conn.execute("DELETE FROM cache WHERE key LIKE ?", (prefix + "%",))
+        self._conn.commit()
+        logger.info("Deleted %d cache entries with prefix '%s'", count, prefix)
+        return count
+
     def clear(self) -> int:
         """Remove all cache entries.
 

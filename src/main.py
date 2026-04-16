@@ -59,7 +59,12 @@ def ask(question: str) -> None:
 @cli.command()
 @click.option("--host", default="0.0.0.0", help="Host to bind to")
 @click.option("--port", default=None, type=int, help="Port (default from config)")
-def dashboard(host: str, port: int | None) -> None:
+@click.option(
+    "--refresh-cache", "refresh_cache",
+    is_flag=True, default=False,
+    help="Invalidate persisted maturity cache on startup and recompute on first request.",
+)
+def dashboard(host: str, port: int | None, refresh_cache: bool) -> None:
     """Start the web dashboard."""
     import uvicorn
     from pathlib import Path
@@ -92,18 +97,21 @@ def dashboard(host: str, port: int | None) -> None:
     root_logger.addHandler(file_handler)
     root_logger.setLevel(getattr(logging, config.log_level, logging.INFO))
 
-    app = create_app(config)
+    app = create_app(config, refresh_maturity_cache=refresh_cache)
 
     # Initialize orchestrator for the web app
     orchestrator = Orchestrator(config)
     app.state.orchestrator = orchestrator
 
+    cache_note = "  [yellow]⚠ Maturity cache refreshed[/]\n" if refresh_cache else ""
     console.print(
         Panel(
             f"[bold cyan]Copilot Pulse Dashboard[/]\n\n"
             f"URL: http://localhost:{port}\n"
             f"Enterprise: {config.github_enterprise or 'N/A'}\n"
             f"Organization: {config.github_org or 'N/A'}\n"
+            f"Maturity cache: 24 h (persistent)\n"
+            f"{cache_note}"
             f"Logs: {log_file}",
             border_style="cyan",
         )

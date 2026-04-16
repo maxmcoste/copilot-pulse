@@ -1,0 +1,776 @@
+{% extends "base.html" %}
+{% block content %}
+
+<!-- ── Maturity Radar Header ─────────────────────────────── -->
+<div class="maturity-header">
+    <div>
+        <h1>{{ t.maturity_title }}</h1>
+        <p class="subtitle">{{ t.maturity_subtitle }}</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        {% if has_org_filters %}
+        <div class="org-filter-bar" id="orgFilterBar">
+            <label class="filter-label">Filter:</label>
+            <select id="filterLevel4" class="filter-select">
+                <option value="">All users</option>
+            </select>
+            <select id="filterLevel5" class="filter-select" disabled>
+                <option value="">— Level 5 —</option>
+            </select>
+            <select id="filterLevel6" class="filter-select" disabled>
+                <option value="">— Level 6 —</option>
+            </select>
+            <select id="filterLevel7" class="filter-select" disabled>
+                <option value="">— Level 7 —</option>
+            </select>
+            <select id="filterLevel8" class="filter-select" disabled>
+                <option value="">— Level 8 —</option>
+            </select>
+            <button id="filterReset" class="filter-reset-btn" style="display:none" title="Reset filter">✕</button>
+            <button id="filterApply" class="filter-apply-btn" title="Apply filter">{{ t.filter_apply }}</button>
+        </div>
+        {% endif %}
+        <button class="help-tip" onclick="togglePanel('panel-filter')" title="What do these filters mean?">?</button>
+        <div class="maturity-filter-toggle" id="maturityFilterToggle">
+            <button id="btnLicensed" class="active" onclick="setMaturityFilter('licensed')">{{ t.maturity_filter_licensed }}</button>
+            <button id="btnActive"   class=""       onclick="setMaturityFilter('active')">{{ t.maturity_filter_active }}</button>
+        </div>
+        <button id="maturityXlsxBtn" onclick="downloadMaturityXlsx()" class="btn-secondary" style="white-space:nowrap;">
+            ⬇ Export XLSX
+        </button>
+    </div>
+</div>
+
+<!-- Filter help panel (below header, full-width) -->
+<div class="help-panel" id="panel-filter">
+    <p><strong>{{ t.maturity_filter_licensed }}</strong> — includes every developer with an assigned Copilot seat, even those who have never opened the IDE. Use this view to assess licence waste and identify training targets across the full headcount.</p>
+    <p><strong>{{ t.maturity_filter_active }}</strong> — includes only developers who appear in the last 28-day usage report, i.e. they triggered at least one event. Use this view to understand the behaviour distribution of the people who are already using Copilot.</p>
+    <p style="color:var(--text-secondary);font-size:11.5px;">Tip: compare the two views side by side. A large gap between totals means a high proportion of dormant licences.</p>
+</div>
+
+<!-- ── Top section: pyramid (left) + KPIs + trend (right) ── -->
+<div class="maturity-top-grid">
+
+    <!-- LEFT: Adoption Pyramid -->
+    <div class="chart-card">
+        <div class="chart-title chart-title-row">
+            {{ t.maturity_pyramid_title }}
+            <button class="help-tip" onclick="togglePanel('panel-pyramid')" title="How are levels calculated?">?</button>
+        </div>
+
+        <!-- Pyramid help panel -->
+        <div class="help-panel" id="panel-pyramid">
+            <p style="color:var(--text-secondary);font-size:11.5px;margin-bottom:10px;">Classification is based solely on <strong>agent_turns</strong> — the 28-day cumulative count of Copilot agent mode invocations. Rules are applied top-down; first match wins.</p>
+
+            <div class="tier-row">
+                <div class="tier-badge-col"><span class="level-badge level-5">L5</span></div>
+                <div class="tier-body">
+                    <div class="tier-title" style="color:#f59e0b;">Elite Agentic</div>
+                    <code class="tier-formula">agent_turns &gt; 150</code>
+                    <div class="tier-desc">Agent mode is a primary part of their daily workflow. Orchestrates Copilot autonomously for multi-file edits, refactors, and complex tasks at high frequency.</div>
+                </div>
+            </div>
+
+            <div class="tier-row">
+                <div class="tier-badge-col"><span class="level-badge level-4">L4</span></div>
+                <div class="tier-body">
+                    <div class="tier-title" style="color:#3fb950;">Advanced Pilot</div>
+                    <code class="tier-formula">50 ≤ agent_turns ≤ 150</code>
+                    <div class="tier-desc">Delegates complex tasks to agent mode regularly. Strong agentic fluency with meaningful autonomous AI usage across the month.</div>
+                </div>
+            </div>
+
+            <div class="tier-row">
+                <div class="tier-badge-col"><span class="level-badge level-3">L3</span></div>
+                <div class="tier-body">
+                    <div class="tier-title" style="color:#58a6ff;">Hybrid Explorer</div>
+                    <code class="tier-formula">10 ≤ agent_turns &lt; 50</code>
+                    <div class="tier-desc">Has started using agent mode meaningfully. The transition phase — experimenting with agentic workflows while still building fluency.</div>
+                </div>
+            </div>
+
+            <div class="tier-row">
+                <div class="tier-badge-col"><span class="level-badge level-2">L2</span></div>
+                <div class="tier-body">
+                    <div class="tier-title" style="color:#8b949e;">Traditionalist</div>
+                    <code class="tier-formula">1 ≤ agent_turns &lt; 10</code>
+                    <div class="tier-desc">Has tried agent mode at least once but uses it only minimally. A candidate for targeted coaching to increase agentic engagement.</div>
+                </div>
+            </div>
+
+            <div class="tier-row">
+                <div class="tier-badge-col"><span class="level-badge level-1">L1</span></div>
+                <div class="tier-body">
+                    <div class="tier-title" style="color:#f85149;">Passive User</div>
+                    <code class="tier-formula">agent_turns = 0</code>
+                    <div class="tier-desc">No agentic activity in the last 28 days. Either the licence is unused or the user has not discovered agent mode. Primary target for onboarding and activation campaigns.</div>
+                </div>
+            </div>
+
+            <dl class="help-glossary">
+                <dt>agent_turns</dt><dd>— times Copilot's agent mode was invoked to autonomously edit code (28-day sum)</dd>
+            </dl>
+        </div>
+
+        <div id="pyramidChart" style="height:320px;">
+            <div class="maturity-loading" id="pyramidLoading">⏳ Loading… (may take up to 2 min on first load)</div>
+            <div id="pyramidError" style="display:none;padding:20px;color:var(--color-danger,#f85149);font-size:13px;">
+                ⚠ Could not load classification data.
+                <button onclick="loadClassification()" style="margin-left:8px;padding:3px 10px;font-size:12px;cursor:pointer;border:1px solid var(--border-color);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);">Retry</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- RIGHT: KPI cards + trend chart -->
+    <div class="maturity-right-col">
+
+        <!-- KPI cards row -->
+        <div class="maturity-kpi-grid" id="maturityKpis">
+            <div class="kpi-card">
+                <div class="kpi-value" id="kpiSkillGap">--%</div>
+                <div class="kpi-label" style="display:flex;align-items:center;justify-content:center;gap:4px;">
+                    {{ t.maturity_skill_gap }}
+                    <button class="help-tip" onclick="togglePanel('panel-skill-gap')" title="How is this calculated?">?</button>
+                </div>
+                <div class="kpi-sub">{{ t.maturity_skill_gap_desc }}</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-value" id="kpiChampionDensity">--%</div>
+                <div class="kpi-label" style="display:flex;align-items:center;justify-content:center;gap:4px;">
+                    {{ t.maturity_champions }}
+                    <button class="help-tip" onclick="togglePanel('panel-champions')" title="How is this calculated?">?</button>
+                </div>
+                <div class="kpi-sub">{{ t.maturity_champions_desc }}</div>
+            </div>
+        </div>
+
+        <!-- KPI help panels (shared row below cards) -->
+        <div class="help-panel" id="panel-skill-gap">
+            <p><strong>Skill Gap Index = (L1 + L2) ÷ total population</strong></p>
+            <p>The proportion of developers who rely solely on passive ghost-text completions (L2) or are effectively inactive (L1). These users represent untapped licence value and are the primary target for upskilling programmes, pair-programming sessions, and AI adoption workshops.</p>
+            <p style="color:var(--text-secondary);font-size:11.5px;">A Skill Gap Index above 60% signals that the majority of the workforce has not yet adopted conversational or agentic AI workflows.</p>
+        </div>
+        <div class="help-panel" id="panel-champions">
+            <p><strong>Champion Density = L5 ÷ total population</strong></p>
+            <p>The share of Elite Agentic developers (L5) in the selected population. These users autonomously orchestrate Copilot through agent mode, CLI pipelines, or achieve more than 30% of their total Copilot activity through agentic actions.</p>
+            <p style="color:var(--text-secondary);font-size:11.5px;">Champions are natural peer-coaches. A Champion Density above 5% gives you enough internal advocates to run meaningful knowledge-transfer programmes without external trainers.</p>
+        </div>
+
+        <!-- Trend chart -->
+        <div class="chart-card" style="flex:1; min-height:180px;">
+            <div class="chart-title chart-title-row">
+                {{ t.maturity_trend_title }}
+                <button class="help-tip" onclick="togglePanel('panel-trend')" title="How is this chart built?">?</button>
+            </div>
+            <div class="help-panel" id="panel-trend">
+                <p>The three stacked bands show the <strong>per-user agent_turns distribution</strong> for each of the last 4 weeks, using the same single-metric logic as the Adoption Pyramid with thresholds scaled to a 7-day window (28-day ÷ 4):</p>
+                <p><span class="level-badge level-1" style="font-size:10px;">L1–L2</span> <strong style="color:#f85149;"> Passive / Traditionalist</strong> — agent_turns = 0 (L1) or 1–2 (L2) this week. A shrinking red band indicates successful activation.</p>
+                <p><span class="level-badge level-3" style="font-size:10px;">L3</span> <strong style="color:#58a6ff;"> Hybrid Explorer</strong> — agent_turns 3–11 this week. A growing blue band shows healthy exploration of agent mode.</p>
+                <p><span class="level-badge level-5" style="font-size:10px;">L4–L5</span> <strong style="color:#f59e0b;"> Agentic</strong> — agent_turns ≥ 12 (L4) or &gt; 37 (L5) this week. A growing amber band is the key success indicator.</p>
+                <p style="color:var(--text-secondary);font-size:11.5px;">Denominator: total licensed seats. Values are directly comparable to the Adoption Pyramid snapshot.</p>
+            </div>
+            <div id="trendChart" style="height:200px;">
+                <div class="maturity-loading">⏳ Loading…</div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<!-- ── LoC by Tier table ───────────────────────────────────── -->
+<div class="chart-card" style="margin-top:0;" id="locByTierCard">
+    <div class="chart-title chart-title-row">
+        Lines of Code Accepted — Last 7 Days by Tier
+        <span id="locWeekLabel" style="font-size:11px;color:var(--text-secondary);font-weight:400;"></span>
+    </div>
+    <div id="locByTierContainer">
+        <div class="maturity-loading">⏳ Loading…</div>
+    </div>
+</div>
+
+<!-- ── User Tier Search ─────────────────────────────────────── -->
+<div class="chart-card" style="margin-top:0;">
+    <div class="chart-title">User Tier Lookup</div>
+    <div style="position:relative;max-width:480px;">
+        <input id="maturitySearchInput" type="text" placeholder="Search by name, surname, email or GitHub username…"
+               autocomplete="off"
+               style="width:100%;padding:8px 12px;border:1px solid var(--border-color);border-radius:6px;
+                      background:var(--bg-secondary);color:var(--text-primary);font-size:13px;box-sizing:border-box;">
+        <div id="maturitySearchResults"
+             style="display:none;position:fixed;z-index:9999;
+                    background:var(--bg-secondary);border:1px solid var(--border-color);
+                    border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.4);max-height:320px;overflow-y:auto;">
+        </div>
+    </div>
+</div>
+
+<!-- ── User Detail Panel ──────────────────────────────────────── -->
+<div id="maturityUserDetail" class="chart-card" style="display:none;margin-top:0;">
+    <div class="chart-title chart-title-row">
+        <span id="detailTitle">User Activity Detail</span>
+        <button onclick="document.getElementById('maturityUserDetail').style.display='none'"
+                style="background:none;border:none;color:var(--text-secondary);font-size:16px;cursor:pointer;padding:0 4px;" title="Close">✕</button>
+    </div>
+    <div id="detailContent"></div>
+</div>
+
+<!-- ── Leaderboard ─────────────────────────────────────────── -->
+<div class="chart-card" style="margin-top:0;">
+    <div class="chart-title chart-title-row">
+        {{ t.maturity_leaderboard }}
+        <button class="help-tip" onclick="togglePanel('panel-leaderboard')" title="How is this list built?">?</button>
+    </div>
+    <div class="help-panel" id="panel-leaderboard">
+        <p><strong>Ranking metric: <code style="font-size:11.5px;">agent_turns</code></strong> — the 28-day cumulative count of times Copilot's agent mode was invoked to autonomously edit code. This is the strongest signal of agentic fluency.</p>
+        <p>Columns: <strong>Agent Turns</strong> (primary rank), <strong>CLI Turns</strong> (terminal-based AI usage), <strong>Active Days</strong> (breadth of engagement over the 28-day window).</p>
+        <p>The list shows github login names. If an employee record with a matching github ID exists in the org database, the full name is shown instead. Only the top 10 are displayed to keep the list actionable — these are your recommended peer-coaches and AI adoption champions.</p>
+        <p style="color:var(--text-secondary);font-size:11.5px;">Tip: invite top-ranked developers to internal AI guilds or lunch-and-learn sessions. Research shows peer-driven adoption outperforms top-down mandates by 3×.</p>
+    </div>
+    <div id="leaderboardContainer">
+        <div class="maturity-loading">⏳ Loading…</div>
+    </div>
+</div>
+
+<script>
+// ── Help panel toggle ─────────────────────────────────────────
+function togglePanel(id) {
+    var panel = document.getElementById(id);
+    if (!panel) return;
+    var isOpen = panel.classList.contains('open');
+    // Close all panels first
+    document.querySelectorAll('.help-panel.open').forEach(function(p) {
+        p.classList.remove('open');
+    });
+    document.querySelectorAll('.help-tip.active').forEach(function(b) {
+        b.classList.remove('active');
+    });
+    if (!isOpen) {
+        panel.classList.add('open');
+        // Mark the triggering button active
+        var btn = panel.previousElementSibling;
+        while (btn && !btn.classList.contains('help-tip')) {
+            btn = btn.previousElementSibling;
+        }
+        if (btn && btn.classList.contains('help-tip')) btn.classList.add('active');
+    }
+}
+
+// ── State ─────────────────────────────────────────────────────
+var _maturityFilter = 'licensed';
+var _maturityData   = null;
+
+// ── Plotly dark base ─────────────────────────────────────────
+var _darkBase = {
+    paper_bgcolor: 'transparent',
+    plot_bgcolor:  'transparent',
+    font: { color: '#c9d1d9', size: 12 },
+    margin: { t: 20, r: 20, b: 40, l: 40 },
+};
+
+// ── Level meta ────────────────────────────────────────────────
+var LEVELS = [
+    { key: 'L5', label: 'L5 Elite Agentic',   color: '#f59e0b' },
+    { key: 'L4', label: 'L4 Advanced Pilot',   color: '#3fb950' },
+    { key: 'L3', label: 'L3 Hybrid Explorer',  color: '#58a6ff' },
+    { key: 'L2', label: 'L2 Traditionalist',   color: '#8b949e' },
+    { key: 'L1', label: 'L1 Passive User',     color: '#f85149' },
+];
+
+function setMaturityFilter(f) {
+    _maturityFilter = f;
+    document.getElementById('btnLicensed').classList.toggle('active', f === 'licensed');
+    document.getElementById('btnActive').classList.toggle('active',   f === 'active');
+    loadClassification();
+}
+
+// ── Org filter query string (reuses app.js _appliedFilter) ───
+function radarOrgQS() {
+    if (typeof _appliedFilter === 'undefined') return '';
+    if (!_appliedFilter.level || !_appliedFilter.value) return '';
+    return '&filter_level=' + encodeURIComponent(_appliedFilter.level) +
+           '&filter_value=' + encodeURIComponent(_appliedFilter.value);
+}
+
+// ── Load classification data ──────────────────────────────────
+function loadClassification() {
+    var loadingEl = document.getElementById('pyramidLoading');
+    var errorEl   = document.getElementById('pyramidError');
+    if (loadingEl) { loadingEl.style.display = ''; }
+    if (errorEl)   { errorEl.style.display = 'none'; }
+
+    var url = '/api/maturity/classification?filter=' + _maturityFilter + radarOrgQS();
+    fetch(url)
+        .then(function(r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        })
+        .then(function(data) {
+            if (loadingEl) loadingEl.style.display = 'none';
+            if (data.error) { console.error('Maturity classification:', data.error); return; }
+            _maturityData = data;
+            renderPyramid(data);
+            renderKpis(data);
+            renderLeaderboard(data.leaderboard);
+        })
+        .catch(function(e) {
+            console.error('Maturity load error:', e);
+            if (loadingEl) loadingEl.style.display = 'none';
+            if (errorEl)   errorEl.style.display = '';
+        });
+}
+
+function loadTrend() {
+    var qs = radarOrgQS();
+    fetch('/api/maturity/trend' + (qs ? '?' + qs.slice(1) : ''))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.error) { console.error('Maturity trend:', data.error); return; }
+            renderTrend(data);
+        })
+        .catch(function(e) { console.error('Trend load error:', e); });
+}
+
+// ── Refresh all radar components ─────────────────────────────
+function refreshRadar() {
+    loadClassification();
+    loadTrend();
+    loadLocByTier();
+}
+
+// ── LoC by Tier table ─────────────────────────────────────────
+function loadLocByTier() {
+    var container = document.getElementById('locByTierContainer');
+    if (container) container.innerHTML = '<div class="maturity-loading">⏳ Loading…</div>';
+
+    var url = '/api/maturity/loc-by-tier?filter=' + _maturityFilter + radarOrgQS().replace(/^&/, '?');
+    fetch('/api/maturity/loc-by-tier?filter=' + _maturityFilter + radarOrgQS())
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.error) {
+                if (container) container.innerHTML = '<p style="color:var(--color-danger,#f85149);padding:12px;">Error: ' + escapeHtml(data.error) + '</p>';
+                return;
+            }
+            var lbl = document.getElementById('locWeekLabel');
+            if (lbl) lbl.textContent = data.week_label || '';
+            renderLocByTier(data);
+        })
+        .catch(function(e) {
+            if (container) container.innerHTML = '<p style="color:var(--color-danger,#f85149);padding:12px;">Failed to load.</p>';
+        });
+}
+
+function renderLocByTier(data) {
+    var container = document.getElementById('locByTierContainer');
+    if (!container) return;
+    var tiers = data.tiers || [];
+    var total = data.total_loc || 0;
+
+    var LCOLORS = { 5:'#f59e0b', 4:'#3fb950', 3:'#58a6ff', 2:'#8b949e', 1:'#f85149' };
+
+    var note = '<p style="font-size:11.5px;color:var(--text-secondary);margin:0 0 10px;">'
+             + 'Virtual FTEs = Lines of Code ÷ (50 lines/day × 7 days). '
+             + 'Additional Virtual FTEs = Virtual FTEs − actual users in tier. '
+             + 'Negative values indicate output below the 50-line/day human baseline.'
+             + '</p>';
+
+    var html = '<table class="leaderboard-table" style="table-layout:fixed;">';
+    html += '<thead><tr>'
+          + '<th style="width:22%">Tier</th>'
+          + '<th style="text-align:right;width:8%">Users</th>'
+          + '<th style="text-align:right;width:14%">Lines of Code</th>'
+          + '<th style="text-align:right;width:12%">LoC / User</th>'
+          + '<th style="text-align:right;width:9%">% total</th>'
+          + '<th style="text-align:right;width:13%">Virtual FTEs</th>'
+          + '<th style="text-align:right;width:16%">Additional Virtual FTEs</th>'
+          + '<th style="width:6%"></th>'
+          + '</tr></thead><tbody>';
+
+    tiers.forEach(function(row) {
+        var barPct = total ? Math.round(row.loc / total * 100) : 0;
+        var addFte = row.additional_fte;
+        var addColor = addFte >= 0 ? '#3fb950' : '#f85149';
+        var addPrefix = addFte >= 0 ? '+' : '';
+        html += '<tr>'
+              + '<td><span class="level-badge level-' + row.tier_level + '">' + escapeHtml(row.tier_name) + '</span></td>'
+              + '<td style="text-align:right;font-variant-numeric:tabular-nums">' + row.user_count + '</td>'
+              + '<td style="text-align:right;font-variant-numeric:tabular-nums">' + row.loc.toLocaleString() + '</td>'
+              + '<td style="text-align:right;font-variant-numeric:tabular-nums">' + (row.loc_per_user || 0).toLocaleString() + '</td>'
+              + '<td style="text-align:right;font-variant-numeric:tabular-nums">' + row.loc_pct + '%</td>'
+              + '<td style="text-align:right;font-variant-numeric:tabular-nums">' + row.virtual_fte.toLocaleString() + '</td>'
+              + '<td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:' + addColor + '">'
+              +   addPrefix + addFte.toLocaleString()
+              + '</td>'
+              + '<td style="padding-left:8px;vertical-align:middle;">'
+              +   '<div style="height:8px;border-radius:4px;background:' + (LCOLORS[row.tier_level] || '#8b949e')
+              +   ';width:' + Math.max(barPct, row.loc > 0 ? 2 : 0) + '%;opacity:0.75;"></div>'
+              + '</td>'
+              + '</tr>';
+    });
+
+    var totalUsers = tiers.reduce(function(s, r) { return s + r.user_count; }, 0);
+    var totalLocPerUser = totalUsers ? Math.round(total / totalUsers) : 0;
+    var totalAddFte = data.total_additional_fte || 0;
+    var totalAddColor = totalAddFte >= 0 ? '#3fb950' : '#f85149';
+    var totalAddPrefix = totalAddFte >= 0 ? '+' : '';
+    html += '<tr style="font-weight:600;border-top:2px solid var(--border-color);">'
+          + '<td>Total</td>'
+          + '<td></td>'
+          + '<td style="text-align:right;font-variant-numeric:tabular-nums">' + total.toLocaleString() + '</td>'
+          + '<td style="text-align:right;font-variant-numeric:tabular-nums">' + totalLocPerUser.toLocaleString() + '</td>'
+          + '<td style="text-align:right">100%</td>'
+          + '<td style="text-align:right;font-variant-numeric:tabular-nums">' + (data.total_virtual_fte || 0).toLocaleString() + '</td>'
+          + '<td style="text-align:right;font-variant-numeric:tabular-nums;color:' + totalAddColor + '">'
+          +   totalAddPrefix + totalAddFte.toLocaleString()
+          + '</td>'
+          + '<td></td>'
+          + '</tr>';
+
+    html += '</tbody></table>';
+    container.innerHTML = note + html;
+}
+
+// ── Pyramid (Plotly funnel) ───────────────────────────────────
+function renderPyramid(data) {
+    var dist = data.distribution || {};
+    var counts = LEVELS.map(function(l) { return dist[l.key] || 0; });
+    var colors = LEVELS.map(function(l) { return l.color; });
+
+    // Bar text: everything the user needs — tier name, count, and %
+    var barText = LEVELS.map(function(l) {
+        var c = dist[l.key] || 0;
+        var pct = data.total ? (c / data.total * 100).toFixed(1) : '0.0';
+        return l.label + '  ' + c + ' (' + pct + '%)';
+    });
+
+    var trace = {
+        type: 'funnel',
+        y: LEVELS.map(function(l) { return l.key; }), // unique short keys — no rendering artefacts
+        x: counts,
+        text: barText,
+        textinfo: 'text',
+        textposition: 'inside',
+        insidetextanchor: 'middle',
+        marker: { color: colors },
+        connector: { line: { color: '#30363d', width: 1 } },
+    };
+
+    var layout = Object.assign({}, _darkBase, {
+        margin: { t: 20, r: 20, b: 20, l: 20 },
+        funnelmode: 'stack',
+        showlegend: false,
+        yaxis: { showticklabels: false },  // hide y-axis — all info is inside bars
+    });
+
+    Plotly.newPlot('pyramidChart', [trace], layout, { responsive: true, displayModeBar: false });
+}
+
+// ── KPI Cards ─────────────────────────────────────────────────
+function renderKpis(data) {
+    var sgPct = (data.skill_gap_index * 100).toFixed(1) + '%';
+    var cdPct = (data.champion_density * 100).toFixed(1) + '%';
+    document.getElementById('kpiSkillGap').textContent       = sgPct;
+    document.getElementById('kpiChampionDensity').textContent = cdPct;
+}
+
+// ── Trend chart (stacked area) ────────────────────────────────
+function renderTrend(data) {
+    var weeks = data.weeks || [];
+
+    var traceL12 = {
+        x: weeks, y: data.l1_l2_pct,
+        name: 'L1–L2 (Ghost Text / Passive)',
+        fill: 'tozeroy',
+        mode: 'lines',
+        line: { color: '#f85149', width: 1.5 },
+        fillcolor: 'rgba(248,81,73,0.15)',
+        stackgroup: 'one',
+    };
+    var traceL3 = {
+        x: weeks, y: data.l3_pct,
+        name: 'L3 Hybrid Explorer',
+        fill: 'tonexty',
+        mode: 'lines',
+        line: { color: '#58a6ff', width: 1.5 },
+        fillcolor: 'rgba(88,166,255,0.15)',
+        stackgroup: 'one',
+    };
+    var traceL45 = {
+        x: weeks, y: data.l5_l4_pct,
+        name: 'L4–L5 Agentic',
+        fill: 'tonexty',
+        mode: 'lines',
+        line: { color: '#f59e0b', width: 1.5 },
+        fillcolor: 'rgba(245,158,11,0.15)',
+        stackgroup: 'one',
+    };
+
+    var layout = Object.assign({}, _darkBase, {
+        margin: { t: 10, r: 20, b: 40, l: 40 },
+        yaxis: { gridcolor: '#30363d', ticksuffix: '%', range: [0, 100] },
+        xaxis: { gridcolor: '#30363d' },
+        legend: { orientation: 'h', y: -0.35, font: { size: 11 } },
+    });
+
+    Plotly.newPlot('trendChart', [traceL12, traceL3, traceL45], layout, {
+        responsive: true, displayModeBar: false,
+    });
+}
+
+// ── Leaderboard ───────────────────────────────────────────────
+function renderLeaderboard(rows) {
+    if (!rows || !rows.length) {
+        document.getElementById('leaderboardContainer').innerHTML =
+            '<p style="color:var(--text-secondary);padding:16px;">No data available.</p>';
+        return;
+    }
+
+    var t = window.T || {};
+    var levelColors = { 5:'#f59e0b', 4:'#3fb950', 3:'#58a6ff', 2:'#8b949e', 1:'#f85149' };
+    var levelNames  = { 5:'L5 Elite', 4:'L4 Advanced', 3:'L3 Hybrid', 2:'L2 Traditional', 1:'L1 Passive' };
+
+    var html = '<table class="leaderboard-table">';
+    html += '<thead><tr>';
+    html += '<th class="leaderboard-rank">' + (t.maturity_col_rank || '#') + '</th>';
+    html += '<th>' + (t.maturity_col_login || 'Developer') + '</th>';
+    html += '<th>' + (t.maturity_col_level || 'Level') + '</th>';
+    html += '<th style="text-align:right">' + (t.maturity_col_agent || 'Agent Turns') + '</th>';
+    html += '<th style="text-align:right">' + (t.maturity_col_cli || 'CLI Turns') + '</th>';
+    html += '<th style="text-align:right">' + (t.maturity_col_days || 'Active Days') + '</th>';
+    html += '</tr></thead><tbody>';
+
+    rows.forEach(function(row) {
+        var rankClass = row.rank <= 3 ? 'leaderboard-rank top3' : 'leaderboard-rank';
+        var lvl = row.level;
+        var badgeStyle = 'background:rgba(0,0,0,.2);color:' + (levelColors[lvl] || '#8b949e');
+        html += '<tr>';
+        html += '<td class="' + rankClass + '">' + row.rank + '</td>';
+        html += '<td style="font-family:monospace">' + escapeHtml(row.login) + '</td>';
+        html += '<td><span class="level-badge level-' + lvl + '">' + (levelNames[lvl] || 'L' + lvl) + '</span></td>';
+        html += '<td style="text-align:right;font-variant-numeric:tabular-nums">' + row.agent_turns + '</td>';
+        html += '<td style="text-align:right;font-variant-numeric:tabular-nums">' + row.cli_turns + '</td>';
+        html += '<td style="text-align:right;font-variant-numeric:tabular-nums">' + row.active_days + '</td>';
+        html += '</tr>';
+    });
+
+    html += '</tbody></table>';
+    document.getElementById('leaderboardContainer').innerHTML = html;
+}
+
+function escapeHtml(s) {
+    return String(s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── User Tier Search ──────────────────────────────────────────
+(function() {
+    var _searchTimer = null;
+    var TIER_COLORS = { 5:'#f59e0b', 4:'#3fb950', 3:'#58a6ff', 2:'#8b949e', 1:'#f85149' };
+
+    function _positionBox() {
+        var inp = document.getElementById('maturitySearchInput');
+        var box = document.getElementById('maturitySearchResults');
+        if (!inp || !box) return;
+        var r = inp.getBoundingClientRect();
+        box.style.top   = (r.bottom + 4) + 'px';
+        box.style.left  = r.left + 'px';
+        box.style.width = r.width + 'px';
+    }
+
+    function _renderResults(results) {
+        var box = document.getElementById('maturitySearchResults');
+        if (!box) return;
+        _positionBox();
+        if (!results || !results.length) {
+            box.innerHTML = '<div style="padding:12px 16px;color:var(--text-secondary);font-size:13px;">No users found.</div>';
+            box.style.display = 'block';
+            return;
+        }
+        var html = '';
+        results.forEach(function(r) {
+            var label = r.display !== r.login
+                ? '<strong>' + escapeHtml(r.display) + '</strong> <span style="color:var(--text-secondary);font-size:11px;">@' + escapeHtml(r.login) + '</span>'
+                : '<strong>@' + escapeHtml(r.login) + '</strong>';
+            var email = r.email
+                ? '<span style="color:var(--text-secondary);font-size:11px;margin-left:6px;">' + escapeHtml(r.email) + '</span>'
+                : '';
+            html += '<div data-login="' + escapeHtml(r.login) + '" class="search-result-row"'
+                  + ' style="padding:10px 16px;border-bottom:1px solid var(--border-color);display:flex;align-items:center;'
+                  + 'justify-content:space-between;gap:12px;cursor:pointer;">'
+                  + '<div>' + label + email + '</div>'
+                  + '<span class="level-badge level-' + r.tier_level + '" style="white-space:nowrap;flex-shrink:0;">'
+                  + 'L' + r.tier_level + ' — ' + escapeHtml(r.tier_name.replace(/^L\d+ /, ''))
+                  + '</span>'
+                  + '</div>';
+        });
+        box.innerHTML = html;
+        box.style.display = 'block';
+
+        // Attach click handlers
+        box.querySelectorAll('.search-result-row').forEach(function(row) {
+            row.addEventListener('mouseenter', function() { this.style.background = 'var(--bg-hover, rgba(255,255,255,0.05))'; });
+            row.addEventListener('mouseleave', function() { this.style.background = ''; });
+            row.addEventListener('click', function() {
+                var login = this.getAttribute('data-login');
+                box.style.display = 'none';
+                loadUserDetail(login);
+            });
+        });
+    }
+
+    function loadUserDetail(login) {
+        var panel = document.getElementById('maturityUserDetail');
+        var content = document.getElementById('detailContent');
+        var title = document.getElementById('detailTitle');
+        if (!panel) return;
+        panel.style.display = '';
+        title.textContent = 'Loading…';
+        content.innerHTML = '<div class="maturity-loading">⏳ Fetching activity data…</div>';
+        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+        fetch('/api/maturity/user-detail?login=' + encodeURIComponent(login) + '&filter=' + _maturityFilter)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.error) {
+                    content.innerHTML = '<p style="color:var(--color-danger,#f85149);padding:16px;">Error: ' + escapeHtml(data.error) + '</p>';
+                    return;
+                }
+                renderUserDetail(data);
+            })
+            .catch(function(e) {
+                content.innerHTML = '<p style="color:var(--color-danger,#f85149);padding:16px;">Failed to load detail.</p>';
+            });
+    }
+
+    function renderUserDetail(d) {
+        var title = document.getElementById('detailTitle');
+        var content = document.getElementById('detailContent');
+        var TIER_COLORS_D = { 5:'#f59e0b', 4:'#3fb950', 3:'#58a6ff', 2:'#8b949e', 1:'#f85149' };
+        var lvl = d.tier_level;
+        var displayName = d.display !== d.login
+            ? escapeHtml(d.display) + ' <span style="color:var(--text-secondary);font-size:12px;">@' + escapeHtml(d.login) + '</span>'
+            : '@' + escapeHtml(d.login);
+        title.innerHTML = displayName + '&ensp;<span class="level-badge level-' + lvl + '">' + escapeHtml(d.tier_name) + '</span>';
+
+        // Build the log text
+        var t = d.totals;
+        var lines = [];
+        lines.push('══════════════════════════════════════════════════════════════');
+        lines.push('ACTIVITY LOG — Last 28 Days');
+        if (d.email) lines.push('Email : ' + d.email);
+        lines.push('Login : @' + d.login);
+        lines.push('══════════════════════════════════════════════════════════════');
+        lines.push(padR('Date', 12) + padL('Completions', 13) + padL('Lines', 8) + padL('Agent', 7) + padL('Chat', 6) + padL('CLI', 5));
+        lines.push('─'.repeat(51));
+
+        (d.daily_logs || []).forEach(function(row) {
+            if (row.completions || row.agent_turns || row.chat_turns || row.cli_turns || row.lines_accepted) {
+                lines.push(
+                    padR(row.date || '—', 12) +
+                    padL(row.completions, 13) +
+                    padL(row.lines_accepted, 8) +
+                    padL(row.agent_turns, 7) +
+                    padL(row.chat_turns, 6) +
+                    padL(row.cli_turns, 5)
+                );
+            }
+        });
+
+        lines.push('─'.repeat(51));
+        lines.push(padR('TOTALS', 12) + padL(t.completions, 13) + padL(t.lines_accepted, 8) + padL(t.agent_turns, 7) + padL(t.chat_turns, 6) + padL(t.cli_turns, 5));
+        lines.push('');
+        lines.push('Active days   : ' + t.active_days + ' / 28');
+        lines.push('Autonomy ratio: ' + (t.autonomy_ratio * 100).toFixed(1) + '%  (agent events ÷ total events)');
+        lines.push('');
+        lines.push('══════════════════════════════════════════════════════════════');
+        lines.push('CLASSIFICATION REASONING');
+        lines.push('══════════════════════════════════════════════════════════════');
+        lines.push(d.reason || '—');
+        lines.push('══════════════════════════════════════════════════════════════');
+
+        var logText = lines.join('\n');
+
+        content.innerHTML =
+            '<textarea readonly style="width:100%;box-sizing:border-box;height:340px;'
+            + 'font-family:\'SF Mono\',\'Fira Code\',monospace;font-size:12px;line-height:1.55;'
+            + 'background:var(--bg-primary,#0d1117);color:var(--text-primary,#c9d1d9);'
+            + 'border:1px solid var(--border-color,#30363d);border-radius:6px;'
+            + 'padding:12px 14px;resize:vertical;">'
+            + escapeHtml(logText)
+            + '</textarea>';
+    }
+
+    function padR(s, n) { s = String(s); return s + ' '.repeat(Math.max(0, n - s.length)); }
+    function padL(s, n) { s = String(s); return ' '.repeat(Math.max(0, n - s.length)) + s; }
+
+    function _doSearch(q) {
+        if (q.length < 2) {
+            var box = document.getElementById('maturitySearchResults');
+            if (box) box.style.display = 'none';
+            return;
+        }
+        var url = '/api/maturity/search?q=' + encodeURIComponent(q) + '&filter=' + _maturityFilter + radarOrgQS();
+        fetch(url)
+            .then(function(r) { return r.json(); })
+            .then(function(data) { _renderResults(data.results || []); })
+            .catch(function(e) { console.error('Maturity search error:', e); });
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        var inp = document.getElementById('maturitySearchInput');
+        var box = document.getElementById('maturitySearchResults');
+        if (!inp) return;
+
+        inp.addEventListener('input', function() {
+            clearTimeout(_searchTimer);
+            _searchTimer = setTimeout(function() { _doSearch(inp.value.trim()); }, 300);
+        });
+
+        // Close results when clicking outside
+        document.addEventListener('click', function(e) {
+            if (box && !inp.contains(e.target) && !box.contains(e.target)) {
+                box.style.display = 'none';
+            }
+        });
+
+        inp.addEventListener('focus', function() {
+            if (inp.value.trim().length >= 2 && box && box.innerHTML) {
+                _positionBox();
+                box.style.display = 'block';
+            }
+        });
+
+        // Reposition on scroll/resize so fixed box tracks the input
+        window.addEventListener('scroll', function() {
+            if (box && box.style.display !== 'none') _positionBox();
+        }, { passive: true });
+        window.addEventListener('resize', function() {
+            if (box && box.style.display !== 'none') _positionBox();
+        });
+    });
+})();
+
+// ── Download XLSX ─────────────────────────────────────────────
+function downloadMaturityXlsx() {
+    var btn = document.getElementById('maturityXlsxBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Exporting…'; }
+    var qs = '?filter=' + _maturityFilter + radarOrgQS();
+    var a = document.createElement('a');
+    a.href = '/api/maturity/xlsx' + qs;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function() {
+        if (btn) { btn.disabled = false; btn.textContent = '⬇ Export XLSX'; }
+    }, 3000);
+}
+
+// ── Init ──────────────────────────────────────────────────────
+window.onOrgFilterApply = refreshRadar;
+loadClassification();
+loadTrend();
+loadLocByTier();
+</script>
+
+{% endblock %}

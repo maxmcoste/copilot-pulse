@@ -51,8 +51,11 @@
             <button class="btn-export-snapshot" id="exportSnapshotBtn" onclick="exportSnapshot()">
                 &#x2913; {{ t.export_snapshot }}
             </button>
-            <button class="btn-inactive-users" id="inactiveUsersBtn" onclick="downloadInactiveUsers()">
+            <button class="btn-inactive-users" id="inactiveUsersBtn" onclick="downloadInactiveUsers(14)">
                 &#x2913; {{ t.inactive_users_csv }}
+            </button>
+            <button class="btn-inactive-users" id="inactiveUsers28dBtn" onclick="downloadInactiveUsers(28)">
+                &#x2913; {{ t.inactive_users_28d_csv }}
             </button>
         </div>
     </div>

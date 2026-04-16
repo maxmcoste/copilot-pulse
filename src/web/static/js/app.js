@@ -1249,7 +1249,7 @@ function initOrgFilters() {
         applyBtn.addEventListener('click', function() {
             _appliedFilter = { level: _activeFilter.level, value: _activeFilter.value };
             updateApplyBtn();
-            refreshDashboard();
+            _onOrgFilterChange();
         });
     }
 
@@ -1260,8 +1260,16 @@ function initOrgFilters() {
         _appliedFilter = { level: null, value: null };
         resetBtn.style.display = 'none';
         updateApplyBtn();
-        refreshDashboard();
+        _onOrgFilterChange();
     });
+}
+
+function _onOrgFilterChange() {
+    if (typeof window.onOrgFilterApply === 'function') {
+        window.onOrgFilterApply();
+    } else {
+        refreshDashboard();
+    }
 }
 
 function filterQueryString() {
@@ -1420,13 +1428,16 @@ function loadVirtualFTE() {
 
 // ── Inactive Users CSV download ──────────────────────────────
 
-function downloadInactiveUsers() {
+function downloadInactiveUsers(days) {
+    days = days || 14;
     var params = new URLSearchParams();
+    params.set('days', days);
     if (_appliedFilter && _appliedFilter.level) params.set('level', _appliedFilter.level);
     if (_appliedFilter && _appliedFilter.value) params.set('value', _appliedFilter.value);
-    var btn = document.getElementById('inactiveUsersBtn');
+    var btnId = days === 28 ? 'inactiveUsers28dBtn' : 'inactiveUsersBtn';
+    var btn = document.getElementById(btnId);
     if (btn) { btn.disabled = true; btn.textContent = '…'; }
-    var url = '/api/inactive-users/xlsx' + (params.toString() ? '?' + params.toString() : '');
+    var url = '/api/inactive-users/xlsx?' + params.toString();
     // Use a hidden anchor so the browser triggers a file download
     var a = document.createElement('a');
     a.href = url;
@@ -1434,8 +1445,9 @@ function downloadInactiveUsers() {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    var labelKey = days === 28 ? 'inactive_users_28d_csv' : 'inactive_users_csv';
     setTimeout(function() {
-        if (btn) { btn.disabled = false; btn.innerHTML = '&#x2913; ' + (window.T && window.T.inactive_users_csv || 'Inactive Users'); }
+        if (btn) { btn.disabled = false; btn.innerHTML = '&#x2913; ' + (window.T && window.T[labelKey] || 'Inactive Users'); }
     }, 2000);
 }
 

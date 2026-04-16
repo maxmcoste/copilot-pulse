@@ -181,11 +181,13 @@ def _build_scale_legend_html(
     return html
 
 
-def create_app(config: AppConfig) -> FastAPI:
+def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastAPI:
     """Create and configure the FastAPI dashboard application.
 
     Args:
         config: Application configuration.
+        refresh_maturity_cache: If True, invalidate any persisted maturity cache
+            entries on startup so the first request triggers a fresh computation.
 
     Returns:
         Configured FastAPI app.
@@ -205,6 +207,15 @@ def create_app(config: AppConfig) -> FastAPI:
     _ttl_28d = config.cache_ttl_28d
     _ttl_weekly = config.cache_ttl_weekly
     _ttl_seats = config.cache_ttl_seats
+
+    # ── Persistent maturity cache (24-hour TTL, survives restarts) ──
+    from ..cache.store import CacheStore as _CacheStore
+    _MATURITY_TTL_H = 24
+    _maturity_store = _CacheStore(ttl_hours=_MATURITY_TTL_H)
+    if refresh_maturity_cache:
+        removed = _maturity_store.delete_prefix("maturity:")
+        logger.info("Maturity cache refreshed: %d entries removed", removed)
+
     # ── Org-structure filter mapping ────────────────────────────
     # github_login → {level4..level8}; populated from the SQLite org DB.
     _org_map: dict[str, dict[str, str]] = {}
@@ -1552,8 +1563,8 @@ def create_app(config: AppConfig) -> FastAPI:
             return {"error": str(e)}
 
     @app.get("/api/inactive-users/xlsx")
-    async def api_inactive_users_csv(request: Request):
-        """Download a CSV of seat holders inactive in the past 14 days.
+    async def api_inactive_users_csv(request: Request, days: int = 14):
+        """Download an XLSX of seat holders inactive in the past N days (default 14).
 
         Joins three sources:
         - Seat API  — full seat list (catches zero-activity users)
@@ -1563,6 +1574,7 @@ def create_app(config: AppConfig) -> FastAPI:
         Respects the active org filter (level/value query params).
         """
         from datetime import date as _date, timedelta as _td, datetime as _dt
+        days = max(1, min(days, 90))  # clamp to sensible range
 
         orch = app.state.orchestrator
         if not orch:
@@ -1581,11 +1593,11 @@ def create_app(config: AppConfig) -> FastAPI:
             )
             if latest_date_str:
                 latest_date = _date.fromisoformat(latest_date_str)
-                cutoff = latest_date - _td(days=13)   # last 14 days inclusive
+                cutoff = latest_date - _td(days=days - 1)   # inclusive window
             else:
-                cutoff = _date.today() - _td(days=14)
+                cutoff = _date.today() - _td(days=days)
 
-            # logins active in last 14 days
+            # logins active in last N days
             active_last_14: set[str] = set()
             last_seen: dict[str, str] = {}
             suggestions_28: dict[str, int] = {}
@@ -1717,7 +1729,7 @@ def create_app(config: AppConfig) -> FastAPI:
             wb.save(buf)
             buf.seek(0)
 
-            filename = f"inactive-users-{_date.today().isoformat()}.xlsx"
+            filename = f"inactive-users-{days}d-{_date.today().isoformat()}.xlsx"
             return StreamingResponse(
                 buf,
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -2126,6 +2138,925 @@ def create_app(config: AppConfig) -> FastAPI:
         except WebSocketDisconnect:
             orch._log_callback = None
             logger.info("WebSocket client disconnected")
+
+    # ------------------------------------------------------------------
+    # AI Maturity Radar — classification + trend endpoints
+    # ------------------------------------------------------------------
+
+    def _classify_user(
+        agent: int,
+        cli: int,
+        chat: int,
+        completions: int,
+        lines_accepted: int,
+        active_days: int,
+    ) -> int:
+        """Assign a maturity level 1–5 based solely on 28-day agent_turns."""
+        if agent > 150:  return 5
+        if agent >= 50:  return 4
+        if agent >= 10:  return 3
+        if agent >= 1:   return 2
+        return 1
+
+    _LEVEL_NAMES = {
+        5: "L5 Elite Agentic",
+        4: "L4 Advanced Pilot",
+        3: "L3 Hybrid Explorer",
+        2: "L2 Traditionalist",
+        1: "L1 Passive User",
+    }
+
+    @app.get("/maturity", response_class=HTMLResponse)
+    async def maturity_page(request: Request):
+        """AI Maturity Radar page."""
+        return templates.TemplateResponse(
+            "ai-maturity-radar.html",
+            _ctx(
+                request,
+                title="AI Maturity Radar — Copilot Pulse",
+                active_tab="maturity",
+                has_org_filters=bool(_org_map),
+            ),
+        )
+
+    @app.get("/api/maturity/classification")
+    async def api_maturity_classification(request: Request, filter: str = "licensed"):
+        """Classify all users/seats into 5 maturity levels.
+
+        Query params:
+          filter  = "active" | "licensed"  (default: "licensed")
+          filter_level, filter_value       — org filter
+        """
+        try:
+            orch = app.state.orchestrator
+            level, value = _parse_filter(request)
+            filter_logins: set[str] | None = _filter_logins(level, value) if level and value else None
+
+            # 1. Seat list → licensed logins
+            licensed: set[str] = set()
+            if orch:
+                seat_result = await orch._tool_seat_info({"org": config.github_org})
+                seats = seat_result.get("seat_info", {}).get("seats", [])
+                licensed = {(s.get("login") or "").lower() for s in seats if s.get("login")}
+
+            # 2. Per-user 28-day records
+            user_records = await _get_raw_user_metrics()
+
+            # Aggregate per-user
+            agg: dict[str, dict[str, Any]] = {}
+            for rec in user_records:
+                login = (rec.get("user_login") or rec.get("github_login") or rec.get("login") or "").lower()
+                if not login:
+                    continue
+                if login not in agg:
+                    agg[login] = {
+                        "agent": 0, "cli": 0, "chat": 0,
+                        "completions": 0, "lines_accepted": 0,
+                        "dates": set(),
+                    }
+                u = agg[login]
+                day = rec.get("date") or rec.get("day", "")
+                if day:
+                    u["dates"].add(day)
+
+                # Agent turns — legacy field OR totals_by_feature (GA)
+                agent_val = rec.get("agent_turns", 0) or 0
+                # CLI turns — legacy field; totals_by_cli dict handled below
+                cli_val = rec.get("cli_turns", 0) or 0
+                # Chat turns — legacy field OR totals_by_feature (GA)
+                chat_val = rec.get("chat_turns", 0) or rec.get("user_initiated_interaction_count", 0) or 0
+                # Completions — legacy field OR totals_by_feature (GA)
+                comp_val = rec.get("completions_acceptances", 0) or 0
+                lines_val = rec.get("completions_lines_accepted", 0) or 0
+
+                for feat in rec.get("totals_by_feature", []):
+                    fname = feat.get("feature", "")
+                    if fname == "agent_edit":
+                        agent_val += feat.get("code_generation_activity_count", 0)
+                    elif fname == "code_completion":
+                        comp_val += feat.get("code_acceptance_activity_count", 0)
+                        lines_val += feat.get("loc_added_sum", 0)
+                    elif "chat" in fname:
+                        chat_val += feat.get("user_initiated_interaction_count", 0)
+
+                # Fallback to top-level GA fields (code_acceptance_activity_count)
+                # if completions weren't captured via totals_by_feature
+                if not comp_val:
+                    comp_val = rec.get("code_acceptance_activity_count", 0) or 0
+                    lines_val = lines_val or rec.get("loc_added_sum", 0) or 0
+
+                # totals_by_cli is a dict (not a list)
+                _cli_data = rec.get("totals_by_cli")
+                if isinstance(_cli_data, dict):
+                    cli_val += _cli_data.get("session_count", 0)
+
+                u["agent"] += agent_val
+                u["cli"] += cli_val
+                u["chat"] += chat_val
+                u["completions"] += comp_val
+                u["lines_accepted"] += lines_val
+
+            # 3. Determine universe (active = has user_records, licensed = all seats)
+            if filter == "active":
+                universe = set(agg.keys())
+            else:
+                # Licensed: union of seats and any active user (active users not in seat list are rare)
+                universe = licensed | set(agg.keys())
+
+            # Apply org filter
+            if filter_logins is not None:
+                universe = universe & filter_logins
+
+            # 4. Classify
+            distribution: dict[str, int] = {"L1": 0, "L2": 0, "L3": 0, "L4": 0, "L5": 0}
+            leaderboard_rows: list[dict[str, Any]] = []
+
+            for login in universe:
+                u = agg.get(login, {})
+                lvl = _classify_user(
+                    agent=u.get("agent", 0),
+                    cli=u.get("cli", 0),
+                    chat=u.get("chat", 0),
+                    completions=u.get("completions", 0),
+                    lines_accepted=u.get("lines_accepted", 0),
+                    active_days=len(u.get("dates", set())),
+                )
+                distribution[f"L{lvl}"] += 1
+                leaderboard_rows.append({
+                    "login": login,
+                    "level": lvl,
+                    "agent_turns": u.get("agent", 0),
+                    "cli_turns": u.get("cli", 0),
+                    "active_days": len(u.get("dates", set())),
+                })
+
+            total = sum(distribution.values())
+            skill_gap = (distribution["L1"] + distribution["L2"]) / total if total else 0.0
+            champion_density = distribution["L5"] / total if total else 0.0
+
+            # Top 10 leaderboard sorted by agent_turns
+            top10 = sorted(leaderboard_rows, key=lambda r: r["agent_turns"], reverse=True)[:10]
+            for i, row in enumerate(top10, 1):
+                row["rank"] = i
+
+            result = {
+                "distribution": distribution,
+                "total": total,
+                "skill_gap_index": round(skill_gap, 4),
+                "champion_density": round(champion_density, 4),
+                "leaderboard": top10,
+            }
+            logger.info(
+                "Maturity classification computed (users=%d, filter=%s, org=%s/%s)",
+                total, filter, level or "—", value or "—",
+            )
+            return JSONResponse(result)
+
+        except Exception as e:
+            logger.error("Maturity classification error: %s", e, exc_info=True)
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    @app.get("/api/maturity/search")
+    async def api_maturity_search(request: Request, q: str = "", filter: str = "licensed"):
+        """Search for a user by name, surname, email, or GitHub login and return their tier.
+
+        Returns up to 10 matches.  Tier is computed from the cached 28-day user records.
+        """
+        q = q.strip()
+        if len(q) < 2:
+            return JSONResponse({"results": []})
+        try:
+            q_lower = q.lower()
+
+            # 1. Aggregate per-user metrics (in-memory cached)
+            user_records = await _get_raw_user_metrics()
+            agg: dict[str, dict[str, Any]] = {}
+            for rec in user_records:
+                login = (
+                    rec.get("user_login") or rec.get("github_login") or
+                    rec.get("login") or ""
+                ).lower()
+                if not login:
+                    continue
+                if login not in agg:
+                    agg[login] = {
+                        "agent": 0, "cli": 0, "chat": 0,
+                        "completions": 0, "lines_accepted": 0, "dates": set(),
+                    }
+                u = agg[login]
+                day = rec.get("date") or rec.get("day", "")
+                if day:
+                    u["dates"].add(day)
+                agent_v = rec.get("agent_turns", 0) or 0
+                cli_v   = rec.get("cli_turns",   0) or 0
+                chat_v  = rec.get("chat_turns",  0) or 0
+                comp_v  = rec.get("completions_acceptances", 0) or 0
+                lines_v = rec.get("completions_lines_accepted", 0) or 0
+                for feat in rec.get("totals_by_feature", []):
+                    fn = feat.get("feature", "")
+                    if fn == "agent_edit":
+                        agent_v += feat.get("code_generation_activity_count", 0)
+                    elif fn == "code_completion":
+                        comp_v  += feat.get("code_acceptance_activity_count", 0)
+                        lines_v += feat.get("loc_added_sum", 0)
+                    elif "chat" in fn:
+                        chat_v  += feat.get("user_initiated_interaction_count", 0)
+                if not comp_v:
+                    comp_v  = rec.get("code_acceptance_activity_count", 0) or 0
+                    lines_v = lines_v or rec.get("loc_added_sum", 0) or 0
+                _cli_data = rec.get("totals_by_cli")
+                if isinstance(_cli_data, dict):
+                    cli_v += _cli_data.get("session_count", 0)
+                u["agent"] += agent_v;  u["cli"] += cli_v
+                u["chat"]  += chat_v;   u["completions"] += comp_v
+                u["lines_accepted"] += lines_v
+
+            # 2. Search OrgDB by name, surname, email, github_id
+            db = _get_orgdb()
+            like = f"%{q_lower}%"
+            try:
+                org_rows = db._conn.execute(
+                    "SELECT github_id, name, surname, email FROM employees "
+                    "WHERE LOWER(name) LIKE ? OR LOWER(surname) LIKE ? "
+                    "OR LOWER(email) LIKE ? OR LOWER(github_id) LIKE ? "
+                    "OR LOWER(name || ' ' || surname) LIKE ? "
+                    "OR LOWER(surname || ' ' || name) LIKE ? "
+                    "LIMIT 20",
+                    (like, like, like, like, like, like)
+                ).fetchall()
+            except Exception:
+                org_rows = []
+
+            # Build candidate set: from org search + direct github_login match
+            candidates: dict[str, dict[str, str]] = {}
+            for github_id, name, surname, email in org_rows:
+                if github_id:
+                    candidates[github_id.lower()] = {
+                        "name": name or "", "surname": surname or "", "email": email or ""
+                    }
+            # Also match logins directly in agg (only useful for single-word queries)
+            if " " not in q_lower:
+                for login in agg:
+                    if q_lower in login and login not in candidates:
+                        candidates[login] = {"name": "", "surname": "", "email": ""}
+
+            # 3. Classify and build results
+            results: list[dict[str, Any]] = []
+            for login, org in candidates.items():
+                if len(results) >= 10:
+                    break
+                u = agg.get(login, {})
+                lvl = _classify_user(
+                    agent=u.get("agent", 0),
+                    cli=u.get("cli", 0),
+                    chat=u.get("chat", 0),
+                    completions=u.get("completions", 0),
+                    lines_accepted=u.get("lines_accepted", 0),
+                    active_days=len(u.get("dates", set())),
+                )
+                display = " ".join(x for x in [org["name"], org["surname"]] if x) or login
+                results.append({
+                    "login":      login,
+                    "name":       org["name"],
+                    "surname":    org["surname"],
+                    "email":      org["email"],
+                    "display":    display,
+                    "tier_level": lvl,
+                    "tier_name":  _LEVEL_NAMES.get(lvl, f"L{lvl}"),
+                })
+
+            return JSONResponse({"results": results})
+        except Exception as e:
+            logger.error("Maturity search error: %s", e, exc_info=True)
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    def _classification_reason(level: int, agent: int, cli: int, chat: int,
+                               completions: int, autonomy: float) -> str:
+        """Human-readable explanation of why a user landed in a given tier (agent_turns only)."""
+        if level == 5:
+            return (
+                f"✅ Matched L5 — Elite Agentic\n"
+                f"agent_turns = {agent} > 150 (28-day total).\n\n"
+                f"This user orchestrates Copilot autonomously at the highest level — "
+                f"agent mode is a primary part of their daily workflow."
+            )
+        if level == 4:
+            return (
+                f"✅ Matched L4 — Advanced Pilot\n"
+                f"agent_turns = {agent} (50–150 range, 28-day total).\n\n"
+                f"This user delegates complex tasks to agent mode regularly. "
+                f"Growing agentic fluency with significant autonomous AI usage."
+            )
+        if level == 3:
+            return (
+                f"✅ Matched L3 — Hybrid Explorer\n"
+                f"agent_turns = {agent} (10–49 range, 28-day total).\n\n"
+                f"This user has started using agent mode meaningfully. "
+                f"The transition phase towards regular agentic adoption."
+            )
+        if level == 2:
+            return (
+                f"✅ Matched L2 — Traditionalist\n"
+                f"agent_turns = {agent} (1–9 range, 28-day total).\n\n"
+                f"This user has tried agent mode at least once but relies on it only minimally. "
+                f"A candidate for targeted coaching to increase agentic engagement."
+            )
+        return (
+            f"✅ Matched L1 — Passive User\n"
+            f"agent_turns = 0 — no agentic activity in 28 days.\n\n"
+            f"This user has not used Copilot agent mode at all in the last 28 days. "
+            f"Primary target for onboarding, activation campaigns, and peer-coaching."
+        )
+
+    @app.get("/api/maturity/user-detail")
+    async def api_maturity_user_detail(request: Request, login: str = "", filter: str = "licensed"):
+        """Return full 28-day activity breakdown and tier reasoning for a single user."""
+        login = login.strip().lower()
+        if not login:
+            return JSONResponse({"error": "login required"}, status_code=400)
+        try:
+            user_records = await _get_raw_user_metrics()
+
+            # Collect per-day rows for this user
+            agg: dict[str, Any] = {
+                "agent": 0, "cli": 0, "chat": 0,
+                "completions": 0, "lines_accepted": 0, "dates": set(),
+            }
+            daily_logs: list[dict[str, Any]] = []
+
+            for rec in user_records:
+                rec_login = (
+                    rec.get("user_login") or rec.get("github_login") or
+                    rec.get("login") or ""
+                ).lower()
+                if rec_login != login:
+                    continue
+
+                day = rec.get("date") or rec.get("day", "")
+                if day:
+                    agg["dates"].add(day)
+
+                agent_v = rec.get("agent_turns", 0) or 0
+                cli_v   = rec.get("cli_turns",   0) or 0
+                chat_v  = rec.get("chat_turns",  0) or 0
+                comp_v  = rec.get("completions_acceptances", 0) or 0
+                lines_v = rec.get("completions_lines_accepted", 0) or 0
+
+                for feat in rec.get("totals_by_feature", []):
+                    fn = feat.get("feature", "")
+                    if fn == "agent_edit":
+                        agent_v += feat.get("code_generation_activity_count", 0)
+                    elif fn == "code_completion":
+                        comp_v  += feat.get("code_acceptance_activity_count", 0)
+                        lines_v += feat.get("loc_added_sum", 0)
+                    elif "chat" in fn:
+                        chat_v  += feat.get("user_initiated_interaction_count", 0)
+                if not comp_v:
+                    comp_v  = rec.get("code_acceptance_activity_count", 0) or 0
+                    lines_v = lines_v or rec.get("loc_added_sum", 0) or 0
+                _cli_data = rec.get("totals_by_cli")
+                if isinstance(_cli_data, dict):
+                    cli_v += _cli_data.get("session_count", 0)
+
+                agg["agent"] += agent_v; agg["cli"] += cli_v
+                agg["chat"]  += chat_v;  agg["completions"] += comp_v
+                agg["lines_accepted"] += lines_v
+
+                daily_logs.append({
+                    "date": day,
+                    "completions": comp_v,
+                    "lines_accepted": lines_v,
+                    "agent_turns": agent_v,
+                    "chat_turns": chat_v,
+                    "cli_turns": cli_v,
+                })
+
+            daily_logs.sort(key=lambda x: x["date"])
+            active_days = len(agg["dates"])
+            total_events = agg["agent"] + agg["completions"] + agg["chat"] + agg["cli"]
+            autonomy = agg["agent"] / total_events if total_events else 0.0
+
+            level = _classify_user(
+                agent=agg["agent"], cli=agg["cli"], chat=agg["chat"],
+                completions=agg["completions"], lines_accepted=agg["lines_accepted"],
+                active_days=active_days,
+            )
+            reason = _classification_reason(
+                level, agg["agent"], agg["cli"], agg["chat"], agg["completions"], autonomy
+            )
+
+            # OrgDB lookup
+            db = _get_orgdb()
+            org = {"name": "", "surname": "", "email": ""}
+            try:
+                row = db._conn.execute(
+                    "SELECT name, surname, email FROM employees "
+                    "WHERE LOWER(github_id) = ? LIMIT 1", (login,)
+                ).fetchone()
+                if row:
+                    org = {
+                        "name": row["name"] or "",
+                        "surname": row["surname"] or "",
+                        "email": row["email"] or "",
+                    }
+            except Exception:
+                pass
+
+            return JSONResponse({
+                "login": login,
+                "display": " ".join(x for x in [org["name"], org["surname"]] if x) or login,
+                "email": org["email"],
+                "tier_level": level,
+                "tier_name": _LEVEL_NAMES.get(level, f"L{level}"),
+                "totals": {
+                    "agent_turns":    agg["agent"],
+                    "cli_turns":      agg["cli"],
+                    "chat_turns":     agg["chat"],
+                    "completions":    agg["completions"],
+                    "lines_accepted": agg["lines_accepted"],
+                    "active_days":    active_days,
+                    "autonomy_ratio": round(autonomy, 4),
+                },
+                "reason": reason,
+                "daily_logs": daily_logs,
+            })
+        except Exception as e:
+            logger.error("Maturity user-detail error: %s", e, exc_info=True)
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    @app.get("/api/maturity/loc-by-tier")
+    async def api_maturity_loc_by_tier(request: Request, filter: str = "licensed"):
+        """Lines of code accepted in the last 7 calendar days, grouped by 28-day maturity tier."""
+        try:
+            from datetime import date as _date, timedelta as _td
+
+            level, value = _parse_filter(request)
+            filter_logins: set[str] | None = (
+                _filter_logins(level, value) if level and value else None
+            )
+
+            # Seat list for licensed filter
+            orch = app.state.orchestrator
+            licensed: set[str] = set()
+            if orch:
+                seat_result = await orch._tool_seat_info({"org": config.github_org})
+                seats_raw = seat_result.get("seat_info", {}).get("seats", [])
+                licensed = {(s.get("login") or "").lower() for s in seats_raw if s.get("login")}
+
+            user_records = await _get_raw_user_metrics()
+
+            # Find latest date in the dataset → last-7-day window
+            all_dates = [
+                rec.get("date") or rec.get("day", "") for rec in user_records
+            ]
+            all_dates = [d for d in all_dates if d]
+            if not all_dates:
+                return JSONResponse({"tiers": [], "total_loc": 0, "week_label": "no data"})
+
+            latest_date = max(all_dates)
+            cutoff = (
+                _date.fromisoformat(latest_date) - _td(days=6)
+            ).isoformat()  # 7-day window: cutoff..latest_date inclusive
+            week_label = f"{cutoff} – {latest_date}"
+
+            # 1st pass: full 28-day aggregates per user (for tier classification)
+            agg_28d: dict[str, dict[str, Any]] = {}
+            # 2nd pass: last-7-day lines_accepted per user
+            loc_7d: dict[str, int] = {}
+
+            for rec in user_records:
+                login = (
+                    rec.get("user_login") or rec.get("github_login") or
+                    rec.get("login") or ""
+                ).lower()
+                if not login:
+                    continue
+                if filter_logins is not None and login not in filter_logins:
+                    continue
+                if filter == "licensed" and licensed and login not in licensed:
+                    continue
+
+                if login not in agg_28d:
+                    agg_28d[login] = {
+                        "agent": 0, "cli": 0, "chat": 0,
+                        "completions": 0, "lines_accepted": 0, "dates": set(),
+                    }
+                u = agg_28d[login]
+                day = rec.get("date") or rec.get("day", "")
+                if day:
+                    u["dates"].add(day)
+
+                agent_v = rec.get("agent_turns", 0) or 0
+                cli_v   = rec.get("cli_turns",   0) or 0
+                chat_v  = rec.get("chat_turns",  0) or 0
+                comp_v  = rec.get("completions_acceptances", 0) or 0
+                lines_v = rec.get("completions_lines_accepted", 0) or 0
+                for feat in rec.get("totals_by_feature", []):
+                    fn = feat.get("feature", "")
+                    if fn == "agent_edit":
+                        agent_v += feat.get("code_generation_activity_count", 0)
+                    elif fn == "code_completion":
+                        comp_v  += feat.get("code_acceptance_activity_count", 0)
+                        lines_v += feat.get("loc_added_sum", 0)
+                    elif "chat" in fn:
+                        chat_v  += feat.get("user_initiated_interaction_count", 0)
+                if not comp_v:
+                    comp_v  = rec.get("code_acceptance_activity_count", 0) or 0
+                    lines_v = lines_v or rec.get("loc_added_sum", 0) or 0
+                _cli_data = rec.get("totals_by_cli")
+                if isinstance(_cli_data, dict):
+                    cli_v += _cli_data.get("session_count", 0)
+
+                u["agent"] += agent_v; u["cli"] += cli_v
+                u["chat"]  += chat_v;  u["completions"] += comp_v
+                u["lines_accepted"] += lines_v
+
+                # Accumulate last-7-day LoC
+                if day and day >= cutoff:
+                    loc_7d[login] = loc_7d.get(login, 0) + lines_v
+
+            # Classify each user by 28-day tier and bucket their 7-day LoC
+            tier_loc:   dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+            tier_users: dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+
+            for login, u in agg_28d.items():
+                lvl = _classify_user(
+                    agent=u["agent"], cli=u["cli"], chat=u["chat"],
+                    completions=u["completions"], lines_accepted=u["lines_accepted"],
+                    active_days=len(u["dates"]),
+                )
+                tier_loc[lvl]   += loc_7d.get(login, 0)
+                tier_users[lvl] += 1
+
+            HUMAN_LOC_PER_FTE_WEEK = 50 * 7  # 350 lines/week baseline
+
+            total_loc = sum(tier_loc.values())
+            tiers = []
+            for lvl in (5, 4, 3, 2, 1):
+                loc        = tier_loc[lvl]
+                users      = tier_users[lvl]
+                virt_fte   = round(loc / HUMAN_LOC_PER_FTE_WEEK, 1)
+                add_fte    = round(virt_fte - users, 1)
+                tiers.append({
+                    "tier_level":      lvl,
+                    "tier_name":       _LEVEL_NAMES[lvl],
+                    "loc":             loc,
+                    "user_count":      users,
+                    "loc_pct":         round(loc / total_loc * 100, 1) if total_loc else 0.0,
+                    "loc_per_user":    round(loc / users, 1) if users else 0.0,
+                    "virtual_fte":     virt_fte,
+                    "additional_fte":  add_fte,
+                })
+            total_virt  = round(total_loc / HUMAN_LOC_PER_FTE_WEEK, 1)
+            total_users = sum(tier_users.values())
+            return JSONResponse({
+                "week_label":         week_label,
+                "tiers":              tiers,
+                "total_loc":          total_loc,
+                "total_virtual_fte":  total_virt,
+                "total_additional_fte": round(total_virt - total_users, 1),
+            })
+        except Exception as e:
+            logger.error("Maturity loc-by-tier error: %s", e, exc_info=True)
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    @app.get("/api/maturity/xlsx")
+    async def api_maturity_xlsx(request: Request, filter: str = "licensed"):
+        """Download an XLSX of all (filtered) users with their maturity tier.
+
+        Columns: name, surname, email, github_login, tier_level, tier_name.
+        Joins with OrgDatabase for HR fields when available.
+        """
+        from datetime import date as _date
+        try:
+            orch = app.state.orchestrator
+            level, value = _parse_filter(request)
+            filter_logins: set[str] | None = (
+                _filter_logins(level, value) if level and value else None
+            )
+
+            # 1. Seat list
+            licensed: set[str] = set()
+            if orch:
+                seat_result = await orch._tool_seat_info({"org": config.github_org})
+                seats_raw = seat_result.get("seat_info", {}).get("seats", [])
+                licensed = {(s.get("login") or "").lower() for s in seats_raw if s.get("login")}
+
+            # 2. Per-user 28-day records — aggregate metrics
+            user_records = await _get_raw_user_metrics()
+            agg: dict[str, dict[str, Any]] = {}
+            for rec in user_records:
+                login = (
+                    rec.get("user_login") or rec.get("github_login") or
+                    rec.get("login") or ""
+                ).lower()
+                if not login:
+                    continue
+                if login not in agg:
+                    agg[login] = {
+                        "agent": 0, "cli": 0, "chat": 0,
+                        "completions": 0, "lines_accepted": 0, "dates": set(),
+                    }
+                u = agg[login]
+                day = rec.get("date") or rec.get("day", "")
+                if day:
+                    u["dates"].add(day)
+
+                agent_v = rec.get("agent_turns", 0) or 0
+                cli_v   = rec.get("cli_turns",   0) or 0
+                chat_v  = rec.get("chat_turns",  0) or 0
+                comp_v  = rec.get("completions_acceptances", 0) or 0
+                lines_v = rec.get("completions_lines_accepted", 0) or 0
+                for feat in rec.get("totals_by_feature", []):
+                    fn = feat.get("feature", "")
+                    if fn == "agent_edit":
+                        agent_v += feat.get("code_generation_activity_count", 0)
+                    elif fn == "code_completion":
+                        comp_v  += feat.get("code_acceptance_activity_count", 0)
+                        lines_v += feat.get("loc_added_sum", 0)
+                    elif "chat" in fn:
+                        chat_v  += feat.get("user_initiated_interaction_count", 0)
+                if not comp_v:
+                    comp_v  = rec.get("code_acceptance_activity_count", 0) or 0
+                    lines_v = lines_v or rec.get("loc_added_sum", 0) or 0
+                _cli_data = rec.get("totals_by_cli")
+                if isinstance(_cli_data, dict):
+                    cli_v += _cli_data.get("session_count", 0)
+                u["agent"] += agent_v;  u["cli"] += cli_v
+                u["chat"]  += chat_v;   u["completions"] += comp_v
+                u["lines_accepted"] += lines_v
+
+            # 3. Universe
+            if filter == "active":
+                universe = set(agg.keys())
+            else:
+                universe = licensed | set(agg.keys())
+            if filter_logins is not None:
+                universe = universe & filter_logins
+
+            # 4. OrgDB lookup helper
+            db = _get_orgdb()
+            def _org_row(login: str) -> dict[str, str]:
+                try:
+                    row = db._conn.execute(
+                        "SELECT name, surname, email FROM employees "
+                        "WHERE LOWER(github_id) = ?",
+                        (login.lower(),)
+                    ).fetchone()
+                    if row:
+                        return {
+                            "name":    row[0] or "",
+                            "surname": row[1] or "",
+                            "email":   row[2] or "",
+                        }
+                except Exception:
+                    pass
+                return {"name": "", "surname": "", "email": ""}
+
+            # 5. Build rows
+            rows: list[dict[str, Any]] = []
+            for login in sorted(universe):
+                u = agg.get(login, {})
+                lvl = _classify_user(
+                    agent=u.get("agent", 0),
+                    cli=u.get("cli", 0),
+                    chat=u.get("chat", 0),
+                    completions=u.get("completions", 0),
+                    lines_accepted=u.get("lines_accepted", 0),
+                    active_days=len(u.get("dates", set())),
+                )
+                org = _org_row(login)
+                rows.append({
+                    "name":       org["name"],
+                    "surname":    org["surname"],
+                    "email":      org["email"],
+                    "github_login": login,
+                    "tier_level": lvl,
+                    "tier_name":  _LEVEL_NAMES.get(lvl, f"L{lvl}"),
+                })
+
+            # 6. Build XLSX
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment
+
+            TIER_COLORS = {
+                5: "1C3A1C",  # dark green bg → amber text N/A: use cell fill
+                4: "1C3A1C",
+                3: "0D2137",
+                2: "2A2A2A",
+                1: "2A0D0D",
+            }
+            TIER_FONT_COLORS = {
+                5: "F59E0B",
+                4: "3FB950",
+                3: "58A6FF",
+                2: "8B949E",
+                1: "F85149",
+            }
+
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Maturity Tiers"
+
+            header_cols = ["Name", "Surname", "Email", "GitHub Login", "Tier Level", "Tier Name"]
+            header_fill = PatternFill("solid", fgColor="0D1117")
+            header_font = Font(bold=True, color="58A6FF")
+            for col_idx, h in enumerate(header_cols, 1):
+                cell = ws.cell(row=1, column=col_idx, value=h)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center")
+
+            col_widths = [18, 18, 32, 22, 12, 22]
+            for i, w in enumerate(col_widths, 1):
+                ws.column_dimensions[
+                    openpyxl.utils.get_column_letter(i)
+                ].width = w
+
+            for r_idx, row in enumerate(rows, 2):
+                lvl = row["tier_level"]
+                fg = TIER_FONT_COLORS.get(lvl, "FFFFFF")
+                ws.cell(row=r_idx, column=1, value=row["name"])
+                ws.cell(row=r_idx, column=2, value=row["surname"])
+                ws.cell(row=r_idx, column=3, value=row["email"])
+                ws.cell(row=r_idx, column=4, value=row["github_login"])
+                tier_level_cell = ws.cell(row=r_idx, column=5, value=f"L{lvl}")
+                tier_level_cell.font = Font(bold=True, color=fg)
+                tier_level_cell.alignment = Alignment(horizontal="center")
+                tier_name_cell = ws.cell(row=r_idx, column=6, value=row["tier_name"])
+                tier_name_cell.font = Font(color=fg)
+
+            buf = io.BytesIO()
+            wb.save(buf)
+            buf.seek(0)
+
+            filename = f"maturity-tiers-{_date.today().isoformat()}.xlsx"
+            return StreamingResponse(
+                buf,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": f"attachment; filename={filename}"},
+            )
+        except Exception as e:
+            logger.error("Maturity XLSX error: %s", e, exc_info=True)
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    @app.get("/api/maturity/trend")
+    async def api_maturity_trend(request: Request):
+        """Return weekly maturity band % using the same per-user classification as the pyramid.
+
+        Splits the 28-day user records into 7-day buckets and classifies each user
+        per week with proportionally scaled thresholds (28-day ÷ 4).
+        Denominator = licensed seats (consistent with the pyramid Licensed view).
+        """
+        try:
+            level, value = _parse_filter(request)
+            _trend_key = f"maturity:trend:{level or ''}:{value or ''}"
+            _cached_trend = _maturity_store.get(_trend_key)
+            if _cached_trend is not None:
+                logger.debug("Maturity trend: cache hit (%s)", _trend_key)
+                return JSONResponse(_cached_trend)
+
+            # 1. Per-user 28-day records (same source as pyramid)
+            user_records = await _get_raw_user_metrics()
+
+            # 2. Seat count for denominator
+            total_seats = 0
+            orch = app.state.orchestrator
+            if orch:
+                seat_result = await orch._tool_seat_info({"org": config.github_org})
+                seats = seat_result.get("seat_info", {}).get("seats", [])
+                total_seats = len(seats)
+
+            # 3. Org filter
+            filter_logins: set[str] | None = (
+                _filter_logins(level, value) if level and value else None
+            )
+            if filter_logins is not None:
+                user_records = [
+                    r for r in user_records
+                    if (r.get("user_login") or r.get("github_login") or "").lower() in filter_logins
+                ]
+                total_seats = len(filter_logins) or total_seats
+
+            # 4. Determine all dates present and build week buckets (newest first → reverse)
+            from datetime import date as _date, timedelta as _td
+            all_dates: set[str] = {
+                r.get("date") or r.get("day", "") for r in user_records
+                if r.get("date") or r.get("day")
+            }
+            if not all_dates:
+                return JSONResponse({"weeks": [], "l5_l4_pct": [], "l3_pct": [], "l1_l2_pct": []})
+
+            max_date = max(all_dates)
+            try:
+                anchor = _date.fromisoformat(max_date)
+            except ValueError:
+                anchor = _date.today()
+
+            # Build 4 weekly buckets covering the 28-day window
+            # Week 1 = oldest (days 22–28), Week 4 = newest (days 1–7)
+            week_buckets: list[tuple[_date, _date]] = []
+            for i in range(3, -1, -1):
+                end   = anchor - _td(days=i * 7)
+                start = end - _td(days=6)
+                week_buckets.append((start, end))
+
+            # Weekly classification thresholds = 28-day ÷ 4 (agent_turns only)
+            # L5: agent > 37  |  L4: 12–37  |  L3: 3–11  |  L2: 1–2  |  L1: 0
+            def _classify_week(agent: int, cli: int, chat: int,
+                               completions: int, lines: int) -> int:
+                if agent > 37:   return 5
+                if agent >= 12:  return 4
+                if agent >= 3:   return 3
+                if agent >= 1:   return 2
+                return 1
+
+            labels: list[str] = []
+            l5_l4: list[float] = []
+            l3: list[float] = []
+            l1_l2: list[float] = []
+
+            for wk_start, wk_end in week_buckets:
+                wk_start_s = wk_start.isoformat()
+                wk_end_s   = wk_end.isoformat()
+
+                # Aggregate per-user for this week
+                wk_agg: dict[str, dict[str, Any]] = {}
+                for rec in user_records:
+                    d = rec.get("date") or rec.get("day", "")
+                    if not d or not (wk_start_s <= d <= wk_end_s):
+                        continue
+                    login = (
+                        rec.get("user_login") or rec.get("github_login") or
+                        rec.get("login") or ""
+                    ).lower()
+                    if not login:
+                        continue
+                    if login not in wk_agg:
+                        wk_agg[login] = {
+                            "agent": 0, "cli": 0, "chat": 0, "completions": 0, "lines": 0
+                        }
+                    u = wk_agg[login]
+
+                    agent_v = rec.get("agent_turns", 0) or 0
+                    cli_v   = rec.get("cli_turns",   0) or 0
+                    chat_v  = rec.get("chat_turns",  0) or 0
+                    comp_v  = rec.get("completions_acceptances", 0) or 0
+                    lines_v = rec.get("completions_lines_accepted", 0) or 0
+
+                    for feat in rec.get("totals_by_feature", []):
+                        fn = feat.get("feature", "")
+                        if fn == "agent_edit":
+                            agent_v += feat.get("code_generation_activity_count", 0)
+                        elif fn == "code_completion":
+                            comp_v  += feat.get("code_acceptance_activity_count", 0)
+                            lines_v += feat.get("loc_added_sum", 0)
+                        elif "chat" in fn:
+                            chat_v  += feat.get("user_initiated_interaction_count", 0)
+                    if not comp_v:
+                        comp_v  = rec.get("code_acceptance_activity_count", 0) or 0
+                        lines_v = lines_v or rec.get("loc_added_sum", 0) or 0
+
+                    _cli_data = rec.get("totals_by_cli")
+                    if isinstance(_cli_data, dict):
+                        cli_v += _cli_data.get("session_count", 0)
+
+                    u["agent"] += agent_v
+                    u["cli"]   += cli_v
+                    u["chat"]  += chat_v
+                    u["completions"] += comp_v
+                    u["lines"] += lines_v
+
+                dist: dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+                for u in wk_agg.values():
+                    lvl = _classify_week(
+                        u["agent"], u["cli"], u["chat"], u["completions"], u["lines"]
+                    )
+                    dist[lvl] += 1
+
+                denom = total_seats or len(wk_agg) or 1
+                l5_l4_pct  = round((dist[5] + dist[4]) / denom * 100, 1)
+                l3_pct_val = round(dist[3] / denom * 100, 1)
+                l1_l2_pct  = round((dist[1] + dist[2]) / denom * 100, 1)
+
+                label = f"W{wk_end.isocalendar()[1]} ({wk_end.strftime('%d/%m')})"
+                labels.append(label)
+                l5_l4.append(l5_l4_pct)
+                l3.append(l3_pct_val)
+                l1_l2.append(l1_l2_pct)
+
+            trend_result = {
+                "weeks": labels,
+                "l5_l4_pct": l5_l4,
+                "l3_pct": l3,
+                "l1_l2_pct": l1_l2,
+            }
+            _maturity_store.set(_trend_key, trend_result)
+            logger.info("Maturity trend cached for 24 h (key=%s)", _trend_key)
+            return JSONResponse(trend_result)
+        except Exception as e:
+            logger.error("Maturity trend error: %s", e, exc_info=True)
+            return JSONResponse({"error": str(e)}, status_code=500)
 
     @app.on_event("startup")
     async def _prewarm_caches() -> None:
