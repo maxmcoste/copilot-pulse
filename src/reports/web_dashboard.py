@@ -322,33 +322,109 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
             return level, value
         return None, None
 
+    _ATTR_FILTER_DIMS: frozenset[str] = frozenset({
+        "job_profile", "job_family", "business_title",
+        "management_level", "is_manager", "age_range",
+    })
+
+    _AGE_RANGE_CASE_SIMPLE = """
+        CASE
+            WHEN age IS NULL THEN 'Unknown'
+            WHEN age < 25   THEN '<25'
+            WHEN age < 30   THEN '25-29'
+            WHEN age < 35   THEN '30-34'
+            WHEN age < 40   THEN '35-39'
+            WHEN age < 45   THEN '40-44'
+            WHEN age < 50   THEN '45-49'
+            WHEN age < 55   THEN '50-54'
+            WHEN age < 60   THEN '55-59'
+            ELSE '60+'
+        END
+    """
+
+    def _parse_attr_filters(request: Request) -> dict[str, list[str]]:
+        """Extract attr_* query params. Returns {dim: [values...]}."""
+        attrs: dict[str, list[str]] = {}
+        for key, val in request.query_params.multi_items():
+            if key.startswith("attr_") and val:
+                dim = key[5:]
+                if dim in _ATTR_FILTER_DIMS:
+                    attrs.setdefault(dim, []).append(val)
+        return attrs
+
+    def _attr_filter_logins(attrs: dict[str, list[str]]) -> set[str] | None:
+        """Query SQLite employees to get github_ids matching attribute filters."""
+        if not attrs:
+            return None
+        db = _get_orgdb()
+        where_clauses: list[str] = []
+        params: list[Any] = []
+        for dim, values in attrs.items():
+            if not values:
+                continue
+            if dim == "age_range":
+                ph = ",".join("?" * len(values))
+                where_clauses.append(f"({_AGE_RANGE_CASE_SIMPLE}) IN ({ph})")
+                params.extend(values)
+            elif dim == "is_manager":
+                mapped = [1 if v.lower() in ("true", "yes", "1") else 0 for v in values]
+                ph = ",".join("?" * len(mapped))
+                where_clauses.append(f"is_manager IN ({ph})")
+                params.extend(mapped)
+            elif dim in {"job_profile", "job_family", "business_title", "management_level"}:
+                ph = ",".join("?" * len(values))
+                where_clauses.append(f"LOWER(COALESCE({dim}, '')) IN ({ph})")
+                params.extend(v.lower() for v in values)
+        if not where_clauses:
+            return None
+        sql = (
+            "SELECT github_id FROM employees "
+            "WHERE github_id IS NOT NULL AND github_id != '' AND "
+            + " AND ".join(where_clauses)
+        )
+        rows = db._conn.execute(sql, params).fetchall()
+        return {str(r[0]).strip().lower() for r in rows}
+
+    def _resolve_filter_logins(request: Request) -> set[str] | None:
+        """Combine org hierarchy filter + attribute filters. Returns None if no filter active."""
+        level, value = _parse_filter(request)
+        org_set = _filter_logins(level, value) if level and value else None
+        attr_set = _attr_filter_logins(_parse_attr_filters(request))
+        if org_set is not None and attr_set is not None:
+            return org_set & attr_set
+        return org_set if org_set is not None else attr_set
+
+    def _filter_cache_key(request: Request) -> str:
+        """Stable cache key incorporating org + attribute filter params."""
+        level, value = _parse_filter(request)
+        attrs = _parse_attr_filters(request)
+        parts = [f"{level}:{value}" if (level and value) else "__all__"]
+        for dim in sorted(attrs.keys()):
+            parts.append(f"{dim}={','.join(sorted(attrs[dim]))}")
+        return "|".join(parts)
+
     async def _get_filtered_records(request: Request) -> tuple[list[dict[str, Any]], bool]:
         """Return records to use — either org-level or filtered user-level.
 
         Returns (records, is_filtered).
         """
-        level, value = _parse_filter(request)
-        if not level or not value:
+        filter_logins = _resolve_filter_logins(request)
+        if filter_logins is None:
             return await _get_raw_org_metrics(), False
-
-        logins = _filter_logins(level, value)
-        if not logins:
+        if not filter_logins:
             return [], True
-
         user_records = await _get_raw_user_metrics()
         filtered = [
             r for r in user_records
-            if r.get("user_login", "").lower() in logins
+            if r.get("user_login", "").lower() in filter_logins
         ]
         return filtered, True
 
     async def _resolve_total_licenses(request: Request, *, is_filtered: bool) -> int:
         """Resolve the license denominator for adoption-style KPIs."""
         if is_filtered:
-            level, value = _parse_filter(request)
-            if level and value:
-                return len(_filter_logins(level, value))
-            return 0
+            fl = _resolve_filter_logins(request)
+            return len(fl) if fl else 0
 
         now = _time.time()
         if _seat_cache["data"] is not None and now - _seat_cache["ts"] < _ttl_seats:
@@ -383,8 +459,7 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
 
     async def _get_weekly_agent_series(request: Request) -> dict[str, Any]:
         """Fetch weekly agent-edit samples shared by multiple dashboard charts."""
-        level, value = _parse_filter(request)
-        cache_key = f"{level}:{value}" if level and value else "__all__"
+        cache_key = _filter_cache_key(request)
         now = _time.time()
         cached = _weekly_agent_cache.get(cache_key)
         if cached and now - cached["ts"] < _ttl_weekly:
@@ -399,7 +474,7 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
             if cached and now - cached["ts"] < _ttl_weekly:
                 return cached["data"]
 
-            filter_logins = _filter_logins(level, value) if level and value else None
+            filter_logins = _resolve_filter_logins(request)
             if filter_logins is not None and not filter_logins:
                 weeks = _weekly_reference_dates()
                 empty = {
@@ -549,6 +624,54 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
         response.set_cookie("lang", lang, max_age=365 * 86400, samesite="lax")
         return response
 
+    @app.get("/api/filter-options")
+    async def api_filter_options():
+        """Return distinct values + counts for each people-attribute filter dimension."""
+        try:
+            db = _get_orgdb()
+            result: dict[str, list[dict]] = {}
+
+            _DIM_COLS = [
+                ("job_profile",      "job_profile"),
+                ("job_family",       "job_family"),
+                ("business_title",   "business_title"),
+                ("management_level", "management_level"),
+            ]
+            for dim_key, col in _DIM_COLS:
+                rows = db._conn.execute(
+                    f"SELECT COALESCE({col}, '') AS v, COUNT(*) AS cnt "
+                    f"FROM employees WHERE {col} IS NOT NULL AND {col} != '' "
+                    f"GROUP BY v ORDER BY cnt DESC"
+                ).fetchall()
+                if rows:
+                    result[dim_key] = [{"value": r[0], "count": r[1]} for r in rows]
+
+            # is_manager (boolean)
+            mgr_rows = db._conn.execute(
+                "SELECT is_manager, COUNT(*) AS cnt FROM employees "
+                "WHERE is_manager IS NOT NULL GROUP BY is_manager ORDER BY is_manager"
+            ).fetchall()
+            if mgr_rows:
+                result["is_manager"] = [
+                    {"value": "true" if r[0] else "false", "count": r[1]}
+                    for r in mgr_rows
+                ]
+
+            # age_range (computed bucket)
+            age_rows = db._conn.execute(
+                f"SELECT ({_AGE_RANGE_CASE_SIMPLE}) AS ar, COUNT(*) AS cnt "
+                f"FROM employees GROUP BY ar ORDER BY ar"
+            ).fetchall()
+            if age_rows:
+                result["age_range"] = [
+                    {"value": r[0], "count": r[1]} for r in age_rows if r[0] != "Unknown"
+                ]
+
+            return result
+        except Exception as e:
+            logger.error("filter-options error: %s", e)
+            return {}
+
     @app.get("/api/org-filters")
     async def api_org_filters():
         """Return available org filter values for cascading dropdowns."""
@@ -635,12 +758,12 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
         """Return KPI cards as an HTML fragment for HTMX swap."""
         lang = _lang(request)
         t = get_translations(lang)
-        level, value = _parse_filter(request)
+        filter_logins = _resolve_filter_logins(request)
 
-        if level and value:
+        if filter_logins is not None:
             # Filtered mode — compute KPIs from user-level data
             try:
-                logins = _filter_logins(level, value)
+                logins = filter_logins
                 # Anchor latest_date from org-level records: they always have one entry
                 # per day for all 28 days, so max(date) is reliably the most recent day
                 # with data (~today-2) regardless of how sparse user activity is.
@@ -745,11 +868,11 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
     @app.get("/api/charts/adoption")
     async def api_chart_adoption(request: Request):
         """Return adoption-trend data for the Plotly line chart."""
-        level, value = _parse_filter(request)
-        if level and value:
+        filter_logins = _resolve_filter_logins(request)
+        if filter_logins is not None:
             # Filtered: aggregate from user-level data
             try:
-                logins = _filter_logins(level, value)
+                logins = filter_logins
                 user_records = await _get_raw_user_metrics()
                 filtered = [r for r in user_records if r.get("user_login", "").lower() in logins]
                 by_day: dict[str, set[str]] = {}
@@ -822,10 +945,9 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
             if not user_records:
                 return {"labels": [], "values": []}
 
-            level, value = _parse_filter(request)
-            if level and value:
-                logins = _filter_logins(level, value)
-                records = [r for r in user_records if r.get("user_login", "").lower() in logins]
+            fl = _resolve_filter_logins(request)
+            if fl is not None:
+                records = [r for r in user_records if r.get("user_login", "").lower() in fl]
             else:
                 records = user_records
 
@@ -874,8 +996,7 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
     @app.get("/api/charts/top-users")
     async def api_chart_top_users(request: Request):
         """Return top 10 active users for a horizontal bar chart."""
-        level, value = _parse_filter(request)
-        filter_logins = _filter_logins(level, value) if level and value else None
+        filter_logins = _resolve_filter_logins(request)
 
         try:
             user_records = await _get_raw_user_metrics()
@@ -1130,11 +1251,11 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
             series = await _get_weekly_agent_series(request)
 
             # Resolve total seats — must respect the active org filter.
-            level, value = _parse_filter(request)
-            is_filtered = bool(level and value)
+            fl_seats = _resolve_filter_logins(request)
+            is_filtered = fl_seats is not None
             if is_filtered:
                 # Filtered: denominator = employees in the selected org group.
-                total_seats = len(_filter_logins(level, value))
+                total_seats = len(fl_seats)
             else:
                 # Unfiltered: use the org-wide seat count from the GitHub API.
                 total_seats = 0
@@ -1621,8 +1742,7 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
                     acceptances_28[login] = acceptances_28.get(login, 0) + feat.get("code_acceptance_activity_count", 0)
 
             # ── 3. Org filter ─────────────────────────────────────────
-            level, value = _parse_filter(request)
-            filter_logins: set[str] | None = _filter_logins(level, value) if level and value else None
+            filter_logins: set[str] | None = _resolve_filter_logins(request)
 
             # ── 4. Build inactive list ────────────────────────────────
             inactive_seats = [
@@ -2151,12 +2271,13 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
         lines_accepted: int,
         active_days: int,
     ) -> int:
-        """Assign a maturity level 1–5 based solely on 28-day agent_turns."""
-        if agent > 150:  return 5
-        if agent >= 50:  return 4
-        if agent >= 10:  return 3
-        if agent >= 1:   return 2
-        return 1
+        """Assign a maturity level 1–5 based on combined agentic activity (agent_turns + cli_turns)."""
+        agentic = agent + cli
+        if agentic >= 151:  return 5   # > 150
+        if agentic >= 51:   return 4   # 51–150
+        if agentic >= 11:   return 3   # 11–50
+        if agentic >= 1:    return 2   # 1–10
+        return 1                        # 0
 
     _LEVEL_NAMES = {
         5: "L5 Elite Agentic",
@@ -2189,8 +2310,7 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
         """
         try:
             orch = app.state.orchestrator
-            level, value = _parse_filter(request)
-            filter_logins: set[str] | None = _filter_logins(level, value) if level and value else None
+            filter_logins: set[str] | None = _resolve_filter_logins(request)
 
             # 1. Seat list → licensed logins
             licensed: set[str] = set()
@@ -2307,8 +2427,8 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
                 "leaderboard": top10,
             }
             logger.info(
-                "Maturity classification computed (users=%d, filter=%s, org=%s/%s)",
-                total, filter, level or "—", value or "—",
+                "Maturity classification computed (users=%d, filter=%s, active_filters=%s)",
+                total, filter, bool(filter_logins),
             )
             return JSONResponse(result)
 
@@ -2432,39 +2552,41 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
 
     def _classification_reason(level: int, agent: int, cli: int, chat: int,
                                completions: int, autonomy: float) -> str:
-        """Human-readable explanation of why a user landed in a given tier (agent_turns only)."""
+        """Human-readable explanation based on combined agentic activity (agent_turns + cli_turns)."""
+        agentic = agent + cli
+        breakdown = f"agent_turns={agent} + cli_turns={cli} = {agentic}"
         if level == 5:
             return (
                 f"✅ Matched L5 — Elite Agentic\n"
-                f"agent_turns = {agent} > 150 (28-day total).\n\n"
+                f"{breakdown} > 150 (28-day total).\n\n"
                 f"This user orchestrates Copilot autonomously at the highest level — "
-                f"agent mode is a primary part of their daily workflow."
+                f"agent mode and/or CLI are a primary part of their daily workflow."
             )
         if level == 4:
             return (
                 f"✅ Matched L4 — Advanced Pilot\n"
-                f"agent_turns = {agent} (50–150 range, 28-day total).\n\n"
-                f"This user delegates complex tasks to agent mode regularly. "
-                f"Growing agentic fluency with significant autonomous AI usage."
+                f"{breakdown} in [51, 150] range (28-day total).\n\n"
+                f"This user delegates complex tasks to agent mode and/or CLI regularly. "
+                f"Strong agentic fluency with significant autonomous AI usage."
             )
         if level == 3:
             return (
                 f"✅ Matched L3 — Hybrid Explorer\n"
-                f"agent_turns = {agent} (10–49 range, 28-day total).\n\n"
-                f"This user has started using agent mode meaningfully. "
+                f"{breakdown} in [11, 50] range (28-day total).\n\n"
+                f"This user has started using agent mode and/or CLI meaningfully. "
                 f"The transition phase towards regular agentic adoption."
             )
         if level == 2:
             return (
                 f"✅ Matched L2 — Traditionalist\n"
-                f"agent_turns = {agent} (1–9 range, 28-day total).\n\n"
-                f"This user has tried agent mode at least once but relies on it only minimally. "
-                f"A candidate for targeted coaching to increase agentic engagement."
+                f"{breakdown} in [1, 10] range (28-day total).\n\n"
+                f"This user has tried agent mode and/or CLI but engagement is still limited. "
+                f"A candidate for targeted coaching to increase agentic usage."
             )
         return (
             f"✅ Matched L1 — Passive User\n"
-            f"agent_turns = 0 — no agentic activity in 28 days.\n\n"
-            f"This user has not used Copilot agent mode at all in the last 28 days. "
+            f"{breakdown} = 0 — no agentic activity in 28 days.\n\n"
+            f"This user has not used Copilot agent mode or CLI at all. "
             f"Primary target for onboarding, activation campaigns, and peer-coaching."
         )
 
@@ -2590,10 +2712,7 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
         try:
             from datetime import date as _date, timedelta as _td
 
-            level, value = _parse_filter(request)
-            filter_logins: set[str] | None = (
-                _filter_logins(level, value) if level and value else None
-            )
+            filter_logins: set[str] | None = _resolve_filter_logins(request)
 
             # Seat list for licensed filter
             orch = app.state.orchestrator
@@ -2730,10 +2849,7 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
         from datetime import date as _date
         try:
             orch = app.state.orchestrator
-            level, value = _parse_filter(request)
-            filter_logins: set[str] | None = (
-                _filter_logins(level, value) if level and value else None
-            )
+            filter_logins: set[str] | None = _resolve_filter_logins(request)
 
             # 1. Seat list
             licensed: set[str] = set()
@@ -2909,9 +3025,8 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
         Denominator = licensed seats (consistent with the pyramid Licensed view).
         """
         try:
-            level, value = _parse_filter(request)
-            _trend_key = f"maturity:trend:{level or ''}:{value or ''}"
-            _cached_trend = _maturity_store.get(_trend_key)
+            _trend_key = _filter_cache_key(request)
+            _cached_trend = _maturity_store.get(f"maturity:trend:{_trend_key}")
             if _cached_trend is not None:
                 logger.debug("Maturity trend: cache hit (%s)", _trend_key)
                 return JSONResponse(_cached_trend)
@@ -2927,10 +3042,8 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
                 seats = seat_result.get("seat_info", {}).get("seats", [])
                 total_seats = len(seats)
 
-            # 3. Org filter
-            filter_logins: set[str] | None = (
-                _filter_logins(level, value) if level and value else None
-            )
+            # 3. Combined filter (org hierarchy + attribute filters)
+            filter_logins: set[str] | None = _resolve_filter_logins(request)
             if filter_logins is not None:
                 user_records = [
                     r for r in user_records
@@ -2961,14 +3074,15 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
                 start = end - _td(days=6)
                 week_buckets.append((start, end))
 
-            # Weekly classification thresholds = 28-day ÷ 4 (agent_turns only)
-            # L5: agent > 37  |  L4: 12–37  |  L3: 3–11  |  L2: 1–2  |  L1: 0
+            # Weekly thresholds = 28-day ÷ 4 (agent_turns + cli_turns)
+            # L5: >=38  |  L4: >=13  |  L3: >=3  |  L2: >=1  |  L1: 0
             def _classify_week(agent: int, cli: int, chat: int,
                                completions: int, lines: int) -> int:
-                if agent > 37:   return 5
-                if agent >= 12:  return 4
-                if agent >= 3:   return 3
-                if agent >= 1:   return 2
+                agentic = agent + cli
+                if agentic >= 38:  return 5
+                if agentic >= 13:  return 4
+                if agentic >= 3:   return 3
+                if agentic >= 1:   return 2
                 return 1
 
             labels: list[str] = []
@@ -3051,7 +3165,7 @@ def create_app(config: AppConfig, refresh_maturity_cache: bool = False) -> FastA
                 "l3_pct": l3,
                 "l1_l2_pct": l1_l2,
             }
-            _maturity_store.set(_trend_key, trend_result)
+            _maturity_store.set(f"maturity:trend:{_trend_key}", trend_result)
             logger.info("Maturity trend cached for 24 h (key=%s)", _trend_key)
             return JSONResponse(trend_result)
         except Exception as e:

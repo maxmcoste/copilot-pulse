@@ -289,6 +289,201 @@ body {
     border-color: var(--accent-blue);
 }
 
+/* ── Attribute Filter Row ────────────────────────────────────── */
+.attr-filter-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 6px 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-top: none;
+    border-radius: 0 0 8px 8px;
+    min-height: 36px;
+}
+
+.add-filter-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: none;
+    border: 1px dashed var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    padding: 3px 10px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+    white-space: nowrap;
+}
+.add-filter-btn:hover {
+    border-color: var(--accent-blue);
+    color: var(--accent-blue);
+}
+
+.filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: #1c2330;
+    border: 1px solid var(--accent-blue);
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 12px;
+    cursor: default;
+}
+.filter-chip__dim {
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+.filter-chip__val {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+.filter-chip__remove {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 0;
+    line-height: 1;
+    transition: color 0.15s;
+}
+.filter-chip__remove:hover { color: var(--accent-red); }
+
+.attr-clear-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 11px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: color 0.15s;
+    white-space: nowrap;
+}
+.attr-clear-btn:hover { color: var(--accent-red); }
+
+/* ── Attribute Filter Picker (fixed popover) ─────────────────── */
+.attr-filter-picker {
+    position: fixed;
+    z-index: 9998;
+    background: #1c2128;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    width: 280px;
+    overflow: hidden;
+    font-size: 13px;
+}
+.attr-picker-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.attr-picker-header button {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+}
+.attr-picker-header button:hover { color: var(--text-primary); }
+.attr-picker-body {
+    max-height: 320px;
+    overflow-y: auto;
+}
+.attr-picker-dim {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    padding: 10px 14px;
+    cursor: pointer;
+    transition: background 0.12s;
+    font-size: 13px;
+}
+.attr-picker-dim:hover { background: #21262d; }
+.attr-picker-dim-group {
+    padding: 4px 14px 2px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+.attr-picker-search {
+    width: calc(100% - 28px);
+    margin: 8px 14px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    padding: 5px 10px;
+    outline: none;
+}
+.attr-picker-search:focus { border-color: var(--accent-blue); }
+.attr-picker-value-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    cursor: pointer;
+    transition: background 0.12s;
+}
+.attr-picker-value-item:hover { background: #21262d; }
+.attr-picker-value-item input[type=checkbox] {
+    accent-color: var(--accent-blue);
+    cursor: pointer;
+}
+.attr-picker-value-label {
+    flex: 1;
+    color: var(--text-primary);
+}
+.attr-picker-value-count {
+    color: var(--text-secondary);
+    font-size: 11px;
+}
+.attr-picker-footer {
+    display: flex;
+    gap: 8px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--border-color);
+}
+.attr-picker-footer button {
+    flex: 1;
+    padding: 6px 0;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    border: none;
+}
+.attr-picker-apply {
+    background: var(--accent-blue);
+    color: #fff;
+    font-weight: 600;
+}
+.attr-picker-apply:hover { opacity: 0.9; }
+.attr-picker-back {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color) !important;
+}
+.attr-picker-back:hover { color: var(--text-primary); }
+
 /* KPI Cards */
 .kpi-grid {
     display: grid;

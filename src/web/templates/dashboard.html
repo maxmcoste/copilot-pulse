@@ -26,9 +26,10 @@
             <div id="dataAsOf" hx-get="/api/data-as-of" hx-trigger="load" hx-swap="innerHTML"></div>
         </div>
         <div class="dashboard-header-right">
+            <div style="display:flex;flex-direction:column;gap:0;">
             {% if has_org_filters %}
-            <div class="org-filter-bar" id="orgFilterBar">
-                <label class="filter-label">Filter:</label>
+            <div class="org-filter-bar" id="orgFilterBar" style="border-radius:8px 8px 0 0;">
+                <label class="filter-label">Org:</label>
                 <select id="filterLevel4" class="filter-select">
                     <option value="">All users</option>
                 </select>
@@ -48,6 +49,10 @@
                 <button id="filterApply" class="filter-apply-btn" title="Apply filter">{{ t.filter_apply }}</button>
             </div>
             {% endif %}
+            <div class="attr-filter-row" id="attrFilterRow">
+                <button class="add-filter-btn" id="addFilterBtn">+ Add filter</button>
+            </div>
+            </div>
             <button class="btn-export-snapshot" id="exportSnapshotBtn" onclick="exportSnapshot()">
                 &#x2913; {{ t.export_snapshot }}
             </button>

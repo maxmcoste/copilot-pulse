@@ -1129,6 +1129,335 @@ var _orgFilterData = null; // cached from /api/org-filters
 var _activeFilter  = { level: null, value: null };  // current dropdown selection
 var _appliedFilter = { level: null, value: null };  // last filter sent to the dashboard
 
+// ── Attribute Filters ────────────────────────────────────────
+
+var _attrFilters  = {};    // { job_profile: ["Sw Eng"], age_range: ["30-34"] }
+var _filterOptions = null; // cached from /api/filter-options
+
+var _SESSION_ORG  = 'cp_pulse_org_filter';
+var _SESSION_ATTR = 'cp_pulse_attr_filters';
+
+var _ATTR_DIM_LABELS = {
+    job_profile:      'Job Profile',
+    job_family:       'Job Family',
+    business_title:   'Business Title',
+    management_level: 'Management Level',
+    is_manager:       'Is Manager',
+    age_range:        'Age Range',
+};
+
+var _ATTR_GROUPS = [
+    { label: 'Role',    dims: ['job_profile', 'job_family', 'business_title'] },
+    { label: 'People',  dims: ['age_range', 'is_manager', 'management_level'] },
+];
+
+function _saveFiltersToSession() {
+    try {
+        sessionStorage.setItem(_SESSION_ORG,  JSON.stringify(_appliedFilter));
+        sessionStorage.setItem(_SESSION_ATTR, JSON.stringify(_attrFilters));
+    } catch (e) {}
+}
+
+function _restoreFiltersFromSession() {
+    try {
+        var orgSaved = sessionStorage.getItem(_SESSION_ORG);
+        if (orgSaved) {
+            var f = JSON.parse(orgSaved);
+            _activeFilter  = f;
+            _appliedFilter = f;
+        }
+        var attrSaved = sessionStorage.getItem(_SESSION_ATTR);
+        if (attrSaved) {
+            _attrFilters = JSON.parse(attrSaved);
+        }
+    } catch (e) {}
+}
+
+function _renderAttrChips() {
+    var row = document.getElementById('attrFilterRow');
+    if (!row) return;
+
+    // Remove old chips and clear button (keep the Add button)
+    row.querySelectorAll('.filter-chip, .attr-clear-btn').forEach(function(el) { el.remove(); });
+
+    var addBtn = row.querySelector('#addFilterBtn');
+    var hasChips = false;
+
+    Object.keys(_attrFilters).forEach(function(dim) {
+        var values = _attrFilters[dim];
+        if (!values || !values.length) return;
+        hasChips = true;
+
+        var chip = document.createElement('span');
+        chip.className = 'filter-chip';
+
+        var dimSpan = document.createElement('span');
+        dimSpan.className = 'filter-chip__dim';
+        dimSpan.textContent = (_ATTR_DIM_LABELS[dim] || dim) + ':';
+
+        var valSpan = document.createElement('span');
+        valSpan.className = 'filter-chip__val';
+        valSpan.textContent = values.length === 1 ? values[0] : values.length + ' selected';
+
+        var removeBtn = document.createElement('button');
+        removeBtn.className = 'filter-chip__remove';
+        removeBtn.textContent = '✕';
+        removeBtn.title = 'Remove filter';
+        removeBtn.addEventListener('click', (function(d) {
+            return function() {
+                delete _attrFilters[d];
+                _saveFiltersToSession();
+                _renderAttrChips();
+                _onOrgFilterChange();
+            };
+        })(dim));
+
+        chip.appendChild(dimSpan);
+        chip.appendChild(valSpan);
+        chip.appendChild(removeBtn);
+        row.insertBefore(chip, addBtn);
+    });
+
+    if (hasChips) {
+        var clearBtn = document.createElement('button');
+        clearBtn.className = 'attr-clear-btn';
+        clearBtn.textContent = 'Clear all';
+        clearBtn.addEventListener('click', function() {
+            _attrFilters = {};
+            _saveFiltersToSession();
+            _renderAttrChips();
+            _onOrgFilterChange();
+        });
+        row.insertBefore(clearBtn, addBtn);
+    }
+}
+
+// ── Attribute Picker Popover ──────────────────────────────────
+
+var _pickerEl = null;
+
+function _closePicker() {
+    if (_pickerEl) { _pickerEl.remove(); _pickerEl = null; }
+}
+
+function _positionPicker(anchorEl) {
+    if (!_pickerEl) return;
+    var rect = anchorEl.getBoundingClientRect();
+    var top  = rect.bottom + 6;
+    var left = rect.left;
+    // Keep within viewport
+    if (left + 280 > window.innerWidth - 8) left = window.innerWidth - 288;
+    _pickerEl.style.top  = top  + 'px';
+    _pickerEl.style.left = left + 'px';
+}
+
+function _showAttrPicker(anchorEl) {
+    _closePicker();
+
+    _pickerEl = document.createElement('div');
+    _pickerEl.className = 'attr-filter-picker';
+
+    _renderPickerStep1(anchorEl);
+
+    document.body.appendChild(_pickerEl);
+    _positionPicker(anchorEl);
+
+    setTimeout(function() {
+        document.addEventListener('click', _pickerOutsideClick, true);
+    }, 0);
+}
+
+function _pickerOutsideClick(e) {
+    if (_pickerEl && !_pickerEl.contains(e.target)) {
+        _closePicker();
+        document.removeEventListener('click', _pickerOutsideClick, true);
+    }
+}
+
+function _renderPickerStep1(anchorEl) {
+    if (!_pickerEl) return;
+    _pickerEl.innerHTML = '';
+
+    var hdr = document.createElement('div');
+    hdr.className = 'attr-picker-header';
+    hdr.innerHTML = '<span>Filter by</span>';
+    var closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.addEventListener('click', function() {
+        _closePicker();
+        document.removeEventListener('click', _pickerOutsideClick, true);
+    });
+    hdr.appendChild(closeBtn);
+    _pickerEl.appendChild(hdr);
+
+    var body = document.createElement('div');
+    body.className = 'attr-picker-body';
+
+    var opts = _filterOptions || {};
+
+    _ATTR_GROUPS.forEach(function(group) {
+        var hasAny = group.dims.some(function(d) { return opts[d] && opts[d].length; });
+        if (!hasAny) return;
+
+        var grpLabel = document.createElement('div');
+        grpLabel.className = 'attr-picker-dim-group';
+        grpLabel.textContent = group.label;
+        body.appendChild(grpLabel);
+
+        group.dims.forEach(function(dim) {
+            if (!opts[dim] || !opts[dim].length) return;
+
+            var btn = document.createElement('button');
+            btn.className = 'attr-picker-dim';
+            var label = _ATTR_DIM_LABELS[dim] || dim;
+            var current = _attrFilters[dim];
+            btn.textContent = label + (current && current.length ? ' (' + current.length + ')' : '');
+            btn.addEventListener('click', function() {
+                _renderPickerStep2(anchorEl, dim);
+                _positionPicker(anchorEl);
+            });
+            body.appendChild(btn);
+        });
+    });
+
+    _pickerEl.appendChild(body);
+}
+
+function _renderPickerStep2(anchorEl, dim) {
+    if (!_pickerEl) return;
+    _pickerEl.innerHTML = '';
+
+    var opts = (_filterOptions || {})[dim] || [];
+    var selected = (_attrFilters[dim] || []).slice();
+
+    var hdr = document.createElement('div');
+    hdr.className = 'attr-picker-header';
+    hdr.innerHTML = '<span>' + (_ATTR_DIM_LABELS[dim] || dim) + '</span>';
+    var closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.addEventListener('click', function() {
+        _closePicker();
+        document.removeEventListener('click', _pickerOutsideClick, true);
+    });
+    hdr.appendChild(closeBtn);
+    _pickerEl.appendChild(hdr);
+
+    var body = document.createElement('div');
+    body.className = 'attr-picker-body';
+
+    // Search box (only if many options)
+    var searchEl = null;
+    if (opts.length > 8) {
+        searchEl = document.createElement('input');
+        searchEl.type = 'text';
+        searchEl.className = 'attr-picker-search';
+        searchEl.placeholder = 'Search...';
+        body.appendChild(searchEl);
+    }
+
+    var itemsContainer = document.createElement('div');
+
+    function renderItems(filter) {
+        itemsContainer.innerHTML = '';
+        opts.forEach(function(opt) {
+            if (filter && opt.value.toLowerCase().indexOf(filter.toLowerCase()) === -1) return;
+            var item = document.createElement('div');
+            item.className = 'attr-picker-value-item';
+
+            var cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = selected.indexOf(opt.value) !== -1;
+            cb.addEventListener('change', function() {
+                if (this.checked) {
+                    if (selected.indexOf(opt.value) === -1) selected.push(opt.value);
+                } else {
+                    selected = selected.filter(function(v) { return v !== opt.value; });
+                }
+            });
+
+            var lbl = document.createElement('span');
+            lbl.className = 'attr-picker-value-label';
+            lbl.textContent = opt.value;
+
+            var cnt = document.createElement('span');
+            cnt.className = 'attr-picker-value-count';
+            cnt.textContent = opt.count;
+
+            item.appendChild(cb);
+            item.appendChild(lbl);
+            item.appendChild(cnt);
+            item.addEventListener('click', function(e) {
+                if (e.target !== cb) { cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); }
+            });
+            itemsContainer.appendChild(item);
+        });
+    }
+
+    renderItems('');
+    body.appendChild(itemsContainer);
+
+    if (searchEl) {
+        searchEl.addEventListener('input', function() { renderItems(this.value); });
+    }
+
+    _pickerEl.appendChild(body);
+
+    var footer = document.createElement('div');
+    footer.className = 'attr-picker-footer';
+
+    var backBtn = document.createElement('button');
+    backBtn.className = 'attr-picker-back';
+    backBtn.textContent = '← Back';
+    backBtn.addEventListener('click', function() {
+        _renderPickerStep1(anchorEl);
+        _positionPicker(anchorEl);
+    });
+
+    var applyBtn = document.createElement('button');
+    applyBtn.className = 'attr-picker-apply';
+    applyBtn.textContent = 'Apply';
+    applyBtn.addEventListener('click', function() {
+        if (selected.length) {
+            _attrFilters[dim] = selected;
+        } else {
+            delete _attrFilters[dim];
+        }
+        _closePicker();
+        document.removeEventListener('click', _pickerOutsideClick, true);
+        _saveFiltersToSession();
+        _renderAttrChips();
+        _onOrgFilterChange();
+    });
+
+    footer.appendChild(backBtn);
+    footer.appendChild(applyBtn);
+    _pickerEl.appendChild(footer);
+}
+
+function initAttrFilters() {
+    var addBtn = document.getElementById('addFilterBtn');
+    if (!addBtn) return;
+
+    fetch('/api/filter-options')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            _filterOptions = data;
+            // If no options at all, hide the add button gracefully
+            var hasAny = Object.keys(data).some(function(k) { return data[k] && data[k].length; });
+            if (!hasAny) addBtn.style.display = 'none';
+        })
+        .catch(function() {});
+
+    addBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (_pickerEl) { _closePicker(); return; }
+        _showAttrPicker(addBtn);
+    });
+
+    // Restore from session and render chips
+    _renderAttrChips();
+}
+
 function initOrgFilters() {
     var bar = document.getElementById('orgFilterBar');
     if (!bar) return;
@@ -1190,6 +1519,21 @@ function initOrgFilters() {
                 opt.value = v; opt.textContent = v;
                 sel4.appendChild(opt);
             });
+
+            // Restore previously applied org filter from sessionStorage.
+            // _activeFilter and _appliedFilter are already restored by _restoreFiltersFromSession().
+            // Here we just sync the dropdown UI for the common (level 4) case.
+            var saved = _appliedFilter;
+            if (saved && saved.level && saved.value) {
+                if (saved.level === '4') {
+                    sel4.value = saved.value;
+                    populateChildren('4', saved.value, sel5);
+                }
+                // For deeper levels, the filter is still applied to API calls via
+                // filterQueryString(); the dropdown just won't visually reflect it.
+                resetBtn.style.display = '';
+                updateApplyBtn();
+            }
         });
 
     sel4.addEventListener('change', function() {
@@ -1265,6 +1609,7 @@ function initOrgFilters() {
 }
 
 function _onOrgFilterChange() {
+    _saveFiltersToSession();
     if (typeof window.onOrgFilterApply === 'function') {
         window.onOrgFilterApply();
     } else {
@@ -1273,9 +1618,17 @@ function _onOrgFilterChange() {
 }
 
 function filterQueryString() {
-    if (!_activeFilter.level || !_activeFilter.value) return '';
-    return '?filter_level=' + encodeURIComponent(_activeFilter.level) +
-           '&filter_value=' + encodeURIComponent(_activeFilter.value);
+    var params = [];
+    if (_activeFilter.level && _activeFilter.value) {
+        params.push('filter_level=' + encodeURIComponent(_activeFilter.level));
+        params.push('filter_value=' + encodeURIComponent(_activeFilter.value));
+    }
+    Object.keys(_attrFilters).forEach(function(dim) {
+        (_attrFilters[dim] || []).forEach(function(v) {
+            params.push('attr_' + encodeURIComponent(dim) + '=' + encodeURIComponent(v));
+        });
+    });
+    return params.length ? '?' + params.join('&') : '';
 }
 
 function refreshDashboard() {
@@ -1591,9 +1944,11 @@ async function exportSnapshot() {
 // ── Initialize ──────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', function() {
+    _restoreFiltersFromSession();
     initChat();
     initSetup();
     initOrgFilters();
+    initAttrFilters();
     initDashboardCharts();
     initROI();
     loadVirtualFTE();

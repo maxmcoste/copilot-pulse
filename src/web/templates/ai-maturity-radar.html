@@ -8,9 +8,10 @@
         <p class="subtitle">{{ t.maturity_subtitle }}</p>
     </div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div style="display:flex;flex-direction:column;gap:0;">
         {% if has_org_filters %}
-        <div class="org-filter-bar" id="orgFilterBar">
-            <label class="filter-label">Filter:</label>
+        <div class="org-filter-bar" id="orgFilterBar" style="border-radius:8px 8px 0 0;">
+            <label class="filter-label">Org:</label>
             <select id="filterLevel4" class="filter-select">
                 <option value="">All users</option>
             </select>
@@ -30,6 +31,10 @@
             <button id="filterApply" class="filter-apply-btn" title="Apply filter">{{ t.filter_apply }}</button>
         </div>
         {% endif %}
+        <div class="attr-filter-row" id="attrFilterRow">
+            <button class="add-filter-btn" id="addFilterBtn">+ Add filter</button>
+        </div>
+        </div>
         <button class="help-tip" onclick="togglePanel('panel-filter')" title="What do these filters mean?">?</button>
         <div class="maturity-filter-toggle" id="maturityFilterToggle">
             <button id="btnLicensed" class="active" onclick="setMaturityFilter('licensed')">{{ t.maturity_filter_licensed }}</button>
@@ -60,14 +65,14 @@
 
         <!-- Pyramid help panel -->
         <div class="help-panel" id="panel-pyramid">
-            <p style="color:var(--text-secondary);font-size:11.5px;margin-bottom:10px;">Classification is based solely on <strong>agent_turns</strong> — the 28-day cumulative count of Copilot agent mode invocations. Rules are applied top-down; first match wins.</p>
+            <p style="color:var(--text-secondary);font-size:11.5px;margin-bottom:10px;">Classification is based on <strong>agentic_turns = agent_turns + cli_turns</strong> (28-day sum). Rules are applied top-down; first match wins.</p>
 
             <div class="tier-row">
                 <div class="tier-badge-col"><span class="level-badge level-5">L5</span></div>
                 <div class="tier-body">
                     <div class="tier-title" style="color:#f59e0b;">Elite Agentic</div>
-                    <code class="tier-formula">agent_turns &gt; 150</code>
-                    <div class="tier-desc">Agent mode is a primary part of their daily workflow. Orchestrates Copilot autonomously for multi-file edits, refactors, and complex tasks at high frequency.</div>
+                    <code class="tier-formula">agent_turns + cli_turns &gt; 150</code>
+                    <div class="tier-desc">Agent mode and/or CLI are a primary part of their daily workflow. Orchestrates Copilot autonomously for multi-file edits, refactors, and complex tasks at high frequency.</div>
                 </div>
             </div>
 
@@ -75,8 +80,8 @@
                 <div class="tier-badge-col"><span class="level-badge level-4">L4</span></div>
                 <div class="tier-body">
                     <div class="tier-title" style="color:#3fb950;">Advanced Pilot</div>
-                    <code class="tier-formula">50 ≤ agent_turns ≤ 150</code>
-                    <div class="tier-desc">Delegates complex tasks to agent mode regularly. Strong agentic fluency with meaningful autonomous AI usage across the month.</div>
+                    <code class="tier-formula">51 ≤ agent_turns + cli_turns ≤ 150</code>
+                    <div class="tier-desc">Delegates complex tasks to agent mode and/or CLI regularly. Strong agentic fluency with meaningful autonomous AI usage across the month.</div>
                 </div>
             </div>
 
@@ -84,8 +89,8 @@
                 <div class="tier-badge-col"><span class="level-badge level-3">L3</span></div>
                 <div class="tier-body">
                     <div class="tier-title" style="color:#58a6ff;">Hybrid Explorer</div>
-                    <code class="tier-formula">10 ≤ agent_turns &lt; 50</code>
-                    <div class="tier-desc">Has started using agent mode meaningfully. The transition phase — experimenting with agentic workflows while still building fluency.</div>
+                    <code class="tier-formula">11 ≤ agent_turns + cli_turns ≤ 50</code>
+                    <div class="tier-desc">Has started using agent mode and/or CLI meaningfully. The transition phase — experimenting with agentic workflows while still building fluency.</div>
                 </div>
             </div>
 
@@ -93,8 +98,8 @@
                 <div class="tier-badge-col"><span class="level-badge level-2">L2</span></div>
                 <div class="tier-body">
                     <div class="tier-title" style="color:#8b949e;">Traditionalist</div>
-                    <code class="tier-formula">1 ≤ agent_turns &lt; 10</code>
-                    <div class="tier-desc">Has tried agent mode at least once but uses it only minimally. A candidate for targeted coaching to increase agentic engagement.</div>
+                    <code class="tier-formula">1 ≤ agent_turns + cli_turns ≤ 10</code>
+                    <div class="tier-desc">Has tried agent mode and/or CLI but engagement is still limited. A candidate for targeted coaching to increase agentic usage.</div>
                 </div>
             </div>
 
@@ -102,13 +107,15 @@
                 <div class="tier-badge-col"><span class="level-badge level-1">L1</span></div>
                 <div class="tier-body">
                     <div class="tier-title" style="color:#f85149;">Passive User</div>
-                    <code class="tier-formula">agent_turns = 0</code>
-                    <div class="tier-desc">No agentic activity in the last 28 days. Either the licence is unused or the user has not discovered agent mode. Primary target for onboarding and activation campaigns.</div>
+                    <code class="tier-formula">agent_turns + cli_turns = 0</code>
+                    <div class="tier-desc">No agentic activity in the last 28 days. Either the licence is unused or the user has not discovered agent mode or CLI. Primary target for onboarding and activation campaigns.</div>
                 </div>
             </div>
 
             <dl class="help-glossary">
-                <dt>agent_turns</dt><dd>— times Copilot's agent mode was invoked to autonomously edit code (28-day sum)</dd>
+                <dt>agent_turns</dt><dd>— IDE agent mode invocations (Copilot Agent in VS Code / JetBrains, 28-day sum)</dd>
+                <dt>cli_turns</dt><dd>— Copilot CLI interactions in the terminal (gh copilot suggest/explain, 28-day sum)</dd>
+                <dt>agentic_turns</dt><dd>— agent_turns + cli_turns (the combined classification metric)</dd>
             </dl>
         </div>
 
@@ -163,10 +170,10 @@
                 <button class="help-tip" onclick="togglePanel('panel-trend')" title="How is this chart built?">?</button>
             </div>
             <div class="help-panel" id="panel-trend">
-                <p>The three stacked bands show the <strong>per-user agent_turns distribution</strong> for each of the last 4 weeks, using the same single-metric logic as the Adoption Pyramid with thresholds scaled to a 7-day window (28-day ÷ 4):</p>
-                <p><span class="level-badge level-1" style="font-size:10px;">L1–L2</span> <strong style="color:#f85149;"> Passive / Traditionalist</strong> — agent_turns = 0 (L1) or 1–2 (L2) this week. A shrinking red band indicates successful activation.</p>
-                <p><span class="level-badge level-3" style="font-size:10px;">L3</span> <strong style="color:#58a6ff;"> Hybrid Explorer</strong> — agent_turns 3–11 this week. A growing blue band shows healthy exploration of agent mode.</p>
-                <p><span class="level-badge level-5" style="font-size:10px;">L4–L5</span> <strong style="color:#f59e0b;"> Agentic</strong> — agent_turns ≥ 12 (L4) or &gt; 37 (L5) this week. A growing amber band is the key success indicator.</p>
+                <p>The three stacked bands show the <strong>per-user agentic_turns (agent + CLI) distribution</strong> for each of the last 4 weeks, using the same logic as the Adoption Pyramid with thresholds scaled to a 7-day window (28-day ÷ 4):</p>
+                <p><span class="level-badge level-1" style="font-size:10px;">L1–L2</span> <strong style="color:#f85149;"> Passive / Traditionalist</strong> — agentic_turns &lt; 2 (L1) or 2–4 (L2) this week. A shrinking red band indicates successful activation.</p>
+                <p><span class="level-badge level-3" style="font-size:10px;">L3</span> <strong style="color:#58a6ff;"> Hybrid Explorer</strong> — agentic_turns 5–24 this week. A growing blue band shows healthy exploration.</p>
+                <p><span class="level-badge level-5" style="font-size:10px;">L4–L5</span> <strong style="color:#f59e0b;"> Agentic</strong> — agentic_turns ≥ 25 (L4) or ≥ 50 (L5) this week. A growing amber band is the key success indicator.</p>
                 <p style="color:var(--text-secondary);font-size:11.5px;">Denominator: total licensed seats. Values are directly comparable to the Adoption Pyramid snapshot.</p>
             </div>
             <div id="trendChart" style="height:200px;">
@@ -180,7 +187,7 @@
 <!-- ── LoC by Tier table ───────────────────────────────────── -->
 <div class="chart-card" style="margin-top:0;" id="locByTierCard">
     <div class="chart-title chart-title-row">
-        Lines of Code Accepted — Last 7 Days by Tier
+        Inline Completion Lines — Last 7 Days by Tier
         <span id="locWeekLabel" style="font-size:11px;color:var(--text-secondary);font-weight:400;"></span>
     </div>
     <div id="locByTierContainer">
@@ -368,38 +375,25 @@ function renderLocByTier(data) {
     var LCOLORS = { 5:'#f59e0b', 4:'#3fb950', 3:'#58a6ff', 2:'#8b949e', 1:'#f85149' };
 
     var note = '<p style="font-size:11.5px;color:var(--text-secondary);margin:0 0 10px;">'
-             + 'Virtual FTEs = Lines of Code ÷ (50 lines/day × 7 days). '
-             + 'Additional Virtual FTEs = Virtual FTEs − actual users in tier. '
-             + 'Negative values indicate output below the 50-line/day human baseline.'
+             + '⚠ Inline completion lines only — lines written by agent mode are not exposed by the GitHub Copilot API.'
              + '</p>';
 
     var html = '<table class="leaderboard-table" style="table-layout:fixed;">';
     html += '<thead><tr>'
-          + '<th style="width:22%">Tier</th>'
-          + '<th style="text-align:right;width:8%">Users</th>'
-          + '<th style="text-align:right;width:14%">Lines of Code</th>'
-          + '<th style="text-align:right;width:12%">LoC / User</th>'
-          + '<th style="text-align:right;width:9%">% total</th>'
-          + '<th style="text-align:right;width:13%">Virtual FTEs</th>'
-          + '<th style="text-align:right;width:16%">Additional Virtual FTEs</th>'
-          + '<th style="width:6%"></th>'
+          + '<th style="width:30%">Tier</th>'
+          + '<th style="text-align:right;width:12%">Users</th>'
+          + '<th style="text-align:right;width:30%">Inline Completion Lines</th>'
+          + '<th style="text-align:right;width:12%">% total</th>'
+          + '<th style="width:16%"></th>'
           + '</tr></thead><tbody>';
 
     tiers.forEach(function(row) {
         var barPct = total ? Math.round(row.loc / total * 100) : 0;
-        var addFte = row.additional_fte;
-        var addColor = addFte >= 0 ? '#3fb950' : '#f85149';
-        var addPrefix = addFte >= 0 ? '+' : '';
         html += '<tr>'
               + '<td><span class="level-badge level-' + row.tier_level + '">' + escapeHtml(row.tier_name) + '</span></td>'
               + '<td style="text-align:right;font-variant-numeric:tabular-nums">' + row.user_count + '</td>'
               + '<td style="text-align:right;font-variant-numeric:tabular-nums">' + row.loc.toLocaleString() + '</td>'
-              + '<td style="text-align:right;font-variant-numeric:tabular-nums">' + (row.loc_per_user || 0).toLocaleString() + '</td>'
               + '<td style="text-align:right;font-variant-numeric:tabular-nums">' + row.loc_pct + '%</td>'
-              + '<td style="text-align:right;font-variant-numeric:tabular-nums">' + row.virtual_fte.toLocaleString() + '</td>'
-              + '<td style="text-align:right;font-variant-numeric:tabular-nums;font-weight:600;color:' + addColor + '">'
-              +   addPrefix + addFte.toLocaleString()
-              + '</td>'
               + '<td style="padding-left:8px;vertical-align:middle;">'
               +   '<div style="height:8px;border-radius:4px;background:' + (LCOLORS[row.tier_level] || '#8b949e')
               +   ';width:' + Math.max(barPct, row.loc > 0 ? 2 : 0) + '%;opacity:0.75;"></div>'
@@ -407,21 +401,11 @@ function renderLocByTier(data) {
               + '</tr>';
     });
 
-    var totalUsers = tiers.reduce(function(s, r) { return s + r.user_count; }, 0);
-    var totalLocPerUser = totalUsers ? Math.round(total / totalUsers) : 0;
-    var totalAddFte = data.total_additional_fte || 0;
-    var totalAddColor = totalAddFte >= 0 ? '#3fb950' : '#f85149';
-    var totalAddPrefix = totalAddFte >= 0 ? '+' : '';
     html += '<tr style="font-weight:600;border-top:2px solid var(--border-color);">'
           + '<td>Total</td>'
           + '<td></td>'
           + '<td style="text-align:right;font-variant-numeric:tabular-nums">' + total.toLocaleString() + '</td>'
-          + '<td style="text-align:right;font-variant-numeric:tabular-nums">' + totalLocPerUser.toLocaleString() + '</td>'
           + '<td style="text-align:right">100%</td>'
-          + '<td style="text-align:right;font-variant-numeric:tabular-nums">' + (data.total_virtual_fte || 0).toLocaleString() + '</td>'
-          + '<td style="text-align:right;font-variant-numeric:tabular-nums;color:' + totalAddColor + '">'
-          +   totalAddPrefix + totalAddFte.toLocaleString()
-          + '</td>'
           + '<td></td>'
           + '</tr>';
 
@@ -435,11 +419,11 @@ function renderPyramid(data) {
     var counts = LEVELS.map(function(l) { return dist[l.key] || 0; });
     var colors = LEVELS.map(function(l) { return l.color; });
 
-    // Bar text: everything the user needs — tier name, count, and %
+    // Bar text: count and % only
     var barText = LEVELS.map(function(l) {
         var c = dist[l.key] || 0;
         var pct = data.total ? (c / data.total * 100).toFixed(1) : '0.0';
-        return l.label + '  ' + c + ' (' + pct + '%)';
+        return c + ' (' + pct + '%)';
     });
 
     var trace = {
